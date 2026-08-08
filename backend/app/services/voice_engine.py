@@ -26,14 +26,24 @@ class VoiceEngine:
 
     def transcribe(self, audio_bytes: bytes) -> str:
         """
-        Transcribe audio bytes into text (Speech-to-Text) using local faster-whisper.
+        Transcribe audio bytes into text (Speech-to-Text).
+        Uses Gemini when available/fast (cloud), falls back to local faster-whisper.
         """
         import time
         start_t = time.time()
         if not audio_bytes:
             print("[VOICE ENGINE] Empty audio bytes received")
             return ""
-            
+
+        # Prefer Gemini on Render (cloud, fast); use faster-whisper locally unless overridden.
+        engine = os.getenv("STT_ENGINE", "gemini" if os.getenv("RENDER") else "whisper")
+        if engine == "gemini":
+            text = self._transcribe_gemini(audio_bytes)
+            if text:
+                print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Gemini)")
+                return text
+            print("[VOICE ENGINE] Gemini transcription empty/failed, falling back to faster-whisper")
+
         # Write input bytes to a temporary file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
             temp_wav.write(audio_bytes)
@@ -75,6 +85,28 @@ class VoiceEngine:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s")
+
+    def _transcribe_gemini(self, audio_bytes: bytes) -> str:
+        """Transcribe audio using the Gemini API (fast, cloud-based)."""
+        import time
+        start_t = time.time()
+        from app.services.gemini_service import GeminiService
+        service = GeminiService()
+        mime = "audio/wav" if audio_bytes.startswith(b"RIFF") else "audio/mpeg"
+        prompt = (
+            "Transcribe this audio exactly as spoken. "
+            "Output ONLY the transcribed text, with no extra words or punctuation changes."
+        )
+        try:
+            response = service.model.generate_content(
+                [{"mime_type": mime, "data": audio_bytes}, prompt]
+            )
+            text = (response.text or "").strip()
+            print(f"[VOICE ENGINE] Gemini transcription complete in {time.time() - start_t:.3f}s: '{text[:120]}'")
+            return text
+        except Exception as e:
+            print(f"[VOICE ENGINE] Gemini transcription failed: {e}")
+            return ""
 
     def _clean_text_for_tts(self, text: str) -> str:
         """
