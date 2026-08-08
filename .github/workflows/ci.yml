@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      working-directory: ./backend
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio black flake8
+    
+    - name: Run lint
+      working-directory: ./backend
+      run: |
+        flake8 app/ --max-line-length=100 --ignore=E501,W503
+    
+    - name: Run formatting check
+      working-directory: ./backend
+      run: |
+        black --check app/ tests/
+    
+    - name: Run tests
+      working-directory: ./backend
+      run: |
+        pytest --cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=90
+    
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report
+        path: backend/htmlcov/

@@ -1,0 +1,69 @@
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
+from typing import List, Optional, AsyncGenerator
+
+load_dotenv()
+
+# 1. إعداد المفتاح
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set. Please set it in backend/.env "
+        "or in the platform environment variables."
+    )
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+# 2. تهيئة النموذج بإعدادات النظام الخاصة بإيفورا
+SYSTEM_INSTRUCTION = """
+أنت 'إيفورا (Evora)'، مساعد شخصي ذكي، سريع، ولبق.
+تتحدث باللغة العربية بأسلوب واضح ومباشر.
+إجاباتك مركزة ومفيدة دائماً.
+"""
+
+class GeminiService:
+    def __init__(self):
+        self.model = genai.GenerativeModel(
+            model_name="gemini-3.5-flash",
+            system_instruction=SYSTEM_INSTRUCTION
+        )
+
+    async def stream_evora_response(self, prompt: str, history: List[dict] = None) -> AsyncGenerator[str, None]:
+        """
+        دالة المحادثة النصية البسيطة مع Streaming
+        """
+        chat = self.model.start_chat(history=history or [])
+        response = chat.send_message(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+
+    async def process_pdf_and_summarize(self, pdf_file_path: str, custom_prompt: str = "قم بتلخيص هذا المستند في نقاط رئيسية واضحة ومحددة.") -> AsyncGenerator[str, None]:
+        """
+        دالة معالجة وتلخيص ملفات PDF
+        """
+        uploaded_file = genai.upload_file(path=pdf_file_path)
+
+        response = self.model.generate_content(
+            [uploaded_file, custom_prompt],
+            stream=True
+        )
+
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+
+        # تنظيف الملف المرفوع بعد الانتهاء
+        try:
+            genai.delete_file(uploaded_file.name)
+        except Exception as e:
+            print(f"Warning: Failed to delete remote file {uploaded_file.name}: {e}")
+
+    def generate_content_sync(self, contents: List[any], history: List[dict] = None) -> str:
+        """
+        Non-streaming sync version for internal pipeline usage if needed.
+        """
+        chat = self.model.start_chat(history=history or [])
+        response = chat.send_message(contents)
+        return response.text

@@ -135,6 +135,14 @@ temp/
 *.tmp
 *.temp
 
+# Audio test artifacts
+*.wav
+*.mp3
+*.aiff
+*.m4a
+!backend/app/**/*.mp3
+!backend/app/**/*.wav
+
 # Build artifacts
 *.o
 *.a

@@ -1,5 +1,5 @@
 # Project Name
-AI Companion
+Aevora
 
 # Mission
 Build a completely local AI companion that can run without cloud APIs.

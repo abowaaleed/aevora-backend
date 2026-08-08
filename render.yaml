@@ -1,0 +1,15 @@
+# Render Blueprint — deploys the "مستفيد / Evora" FastAPI backend as a Docker web service.
+#
+# After the first deploy, set the GEMINI_API_KEY value in the dashboard:
+#   Dashboard > evora-backend > Environment > edit the value of GEMINI_API_KEY
+services:
+  - type: web
+    name: evora-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/
+    autoDeploy: true
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false

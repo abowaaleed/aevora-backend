@@ -14,12 +14,22 @@
 - Keep functions small.
 - Avoid duplicated code.
 - Use meaningful variable names.
+- Never duplicate logic.
+- Every feature must be replaceable.
+- Every service must have one responsibility.
+- Every engine must be independent.
+- No circular dependencies.
+- Every feature should be testable.
 
 # Backend Rules
 
 - Backend must use Python + FastAPI.
 - Business logic must never be placed inside API endpoints.
 - Separate API, Services, Models, Memory and Core.
+- Every API must have Pydantic models.
+- Never hardcode prompts.
+- Every prompt belongs inside Prompt Engine.
+- Never bypass ConversationManager.
 
 # Flutter Rules
 

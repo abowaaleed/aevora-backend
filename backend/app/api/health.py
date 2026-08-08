@@ -13,7 +13,7 @@ class HealthResponse(BaseModel):
 @router.get("/", response_model=HealthResponse)
 async def get_health():
     return HealthResponse(
-        status="ok",
-        project="AI Companion",
+        status="healthy",
+        project="مستفيد",
         version="0.1.0"
     )
