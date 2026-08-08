@@ -29,11 +29,34 @@ class GeminiService:
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    async def stream_evora_response(self, prompt: str, history: List[dict] = None) -> AsyncGenerator[str, None]:
+    async def stream_evora_response(
+        self,
+        prompt: str,
+        history: List[dict] = None,
+        knowledge: str = None,
+        system_instruction: str = None,
+    ) -> AsyncGenerator[str, None]:
         """
-        دالة المحادثة النصية البسيطة مع Streaming
+        دالة المحادثة النصية مع Streaming
+        عند وجود معرفة من مستندات مرفوعة (RAG) تُحقن في الرسالة ليعتمد عليها النموذج.
         """
-        chat = self.model.start_chat(history=history or [])
+        model = self.model
+        if system_instruction:
+            model = genai.GenerativeModel(
+                model_name="gemini-3.5-flash",
+                system_instruction=system_instruction,
+            )
+
+        if knowledge:
+            prompt = (
+                "إليك معلومات مأخوذة من مستندات مرفوعة من قبل المستخدم. "
+                "أجب عن سؤال المستخدم بالاعتماد على هذه المعلومات حصراً، "
+                "وإن لم تكن الإجابة موجودة فيها فقل ذلك بوضوح دون اختلاق بيانات.\n\n"
+                f"المعلومات:\n{knowledge}\n\n"
+                f"سؤال المستخدم: {prompt}"
+            )
+
+        chat = model.start_chat(history=history or [])
         response = chat.send_message(prompt, stream=True)
         for chunk in response:
             if chunk.text:

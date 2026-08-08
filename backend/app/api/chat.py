@@ -5,6 +5,7 @@ from app.services.conversation_manager import ConversationManager
 from app.providers.gemini_provider import GeminiProvider
 from app.runtime import Runtime
 from app.prompt_engine import Skill
+from app.api.rag import doc_service
 import json
 import asyncio
 
@@ -54,7 +55,9 @@ async def chat_stream(
     gemini_provider: GeminiProvider = Depends(get_gemini_provider)
 ):
     """
-    Streaming chat endpoint using Gemini 1.5 Flash.
+    Streaming chat endpoint with RAG support.
+    Runs a document lookup first; if relevant content is found it is injected
+    into the prompt so the model answers from the uploaded documents.
     Yields SSE events in the format expected by the Flutter client:
         data: {"text": "..."}\n\n
     and terminates with:
@@ -64,8 +67,33 @@ async def chat_stream(
 
     async def event_generator():
         try:
-            async for chunk in gemini_provider.service.stream_evora_response(request.message):
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
+            knowledge = ""
+            direct_answer = None
+            try:
+                check = doc_service.vector_store.collection.get(limit=1)
+                has_docs = bool(check and check.get("documents") and len(check["documents"]) > 0)
+                if has_docs:
+                    rag_result = doc_service.query(request.message)
+                    rag_type = rag_result.get("type", "none")
+                    answer = rag_result.get("answer", "")
+                    if rag_type in ("structured_answer", "aggregation_refused") and answer:
+                        direct_answer = answer
+                    elif answer:
+                        knowledge = answer
+                        source = rag_result.get("source") or rag_result.get("sources")
+                        if source:
+                            knowledge += f"\n[المصدر: {source}]"
+                    print(f"[CHAT API] RAG hit: type={rag_type}, knowledge_len={len(knowledge)}")
+            except Exception as e:
+                print(f"[CHAT API] RAG lookup failed: {e}")
+
+            if direct_answer:
+                yield f"data: {json.dumps({'text': direct_answer})}\n\n"
+            else:
+                async for chunk in gemini_provider.service.stream_evora_response(
+                    request.message, knowledge=knowledge
+                ):
+                    yield f"data: {json.dumps({'text': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             print(f"[CHAT API] Streaming error: {e}")
