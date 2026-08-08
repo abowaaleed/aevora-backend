@@ -90,3 +90,37 @@ class GeminiService:
         chat = self.model.start_chat(history=history or [])
         response = chat.send_message(contents)
         return response.text
+
+    def extract_text_from_image(self, image_bytes: bytes, mime_type: str) -> str:
+        """
+        Send an image to Gemini (vision) and extract all text/information in it.
+        Used by the RAG pipeline to index image uploads.
+        """
+        prompt = (
+            "استخرج بدقة كل النصوص والمعلومات المكتوبة أو الظاهرة في هذه الصورة "
+            "باللغة الأصلية الموجودة فيها، ورتبها بنفس ترتيبها. "
+            "لا تضف أي شرح أو تعليق، وأعد المحتوى المستخرج فقط."
+        )
+        response = self.model.generate_content(
+            [{"mime_type": mime_type, "data": image_bytes}, prompt]
+        )
+        return (response.text or "").strip()
+
+    def extract_text_from_pdf(self, pdf_path: str) -> str:
+        """
+        Send a PDF to Gemini for full analysis/extraction.
+        Used as a fallback for scanned PDFs where text extraction yields nothing.
+        """
+        uploaded_file = genai.upload_file(path=pdf_path)
+        try:
+            prompt = (
+                "استخرج بدقة كل النصوص والمعلومات الموجودة في هذا الملف باللغة الأصلية "
+                "ورتبها بنفس الترتيب. لا تضف أي شرح أو تعليق، وأعد المحتوى المستخرج فقط."
+            )
+            response = self.model.generate_content([uploaded_file, prompt])
+            return (response.text or "").strip()
+        finally:
+            try:
+                genai.delete_file(uploaded_file.name)
+            except Exception:
+                pass

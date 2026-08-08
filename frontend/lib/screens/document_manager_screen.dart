@@ -44,7 +44,10 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.custom,
-      allowedExtensions: ['pdf', 'docx', 'xlsx', 'csv', 'txt'],
+      allowedExtensions: [
+        'pdf', 'docx', 'xlsx', 'csv', 'txt',
+        'jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'heic', 'heif',
+      ],
     );
 
     if (result != null && result.files.isNotEmpty) {
@@ -249,7 +252,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'ارفع ملفات PDF أو Word أو جداول البيانات للإجابة عنها',
+                    'ارفع ملفات PDF أو Word أو جداول البيانات أو الصور للإجابة عنها',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white70),
                   ),
                 ],

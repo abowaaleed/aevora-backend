@@ -10,11 +10,26 @@ from typing import List, Dict, Any, Optional, Tuple
 from .vector_store import LocalVectorStore
 from .structured_store import StructuredStore
 from .structured_extractor import extract_records, compute_answer, StructuredRecordStore, detect_range_query
+from app.services.gemini_service import GeminiService
 import threading
 import asyncio
 
 SMALL_DOC_THRESHOLD = 2000  # chars — documents under this size use full-injection mode
 LARGE_DOC_TOP_K = 3          # chunks retrieved for large documents
+
+# Supported image extensions — sent to Gemini vision for content extraction.
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic", ".heif"}
+
+_IMAGE_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
 
 # ── Aggregation / counting query detection ──────────────────────────────────
 # Rule-based classifier: returns True when a query demands numeric computation
@@ -283,54 +298,39 @@ class DocumentService:
                 # Normalize Unicode: convert Presentation Forms (FB/FE) to logical Arabic (06xx)
                 text = unicodedata.normalize('NFKC', text)
 
-                # Classify document size: small = full injection, large = chunked retrieval
-                is_small = len(text) <= SMALL_DOC_THRESHOLD
+                # Scanned PDF fallback: if text extraction returned nothing useful,
+                # send the PDF to Gemini for full analysis and content extraction.
+                if ext == ".pdf" and len(text.strip()) < 20:
+                    self._processing_progress[filename] = "Scanned PDF — analyzing with Gemini..."
+                    try:
+                        gemini_text = GeminiService().extract_text_from_pdf(str(file_path))
+                        if gemini_text:
+                            text = gemini_text
+                    except Exception as ge:
+                        print(f"[DOCUMENT SERVICE] Gemini PDF extraction failed for {filename}: {ge}")
 
-                if is_small:
-                    self._processing_progress[filename] = "Small document — storing full text for direct injection..."
-                    docs = [text]
-                    metadatas = [{
-                        "filename": filename,
-                        "clause": "",
-                        "index": 0,
-                        "mode": "full_injection",
-                        "char_count": len(text),
-                        "timestamp": datetime.datetime.now().isoformat()
-                    }]
-                    ids = [f"{filename}_full"]
-                else:
-                    self._processing_progress[filename] = "Chunking text..."
-                    chunks = self._chunk_text(text)
-                    self._processing_progress[filename] = f"Generating embeddings (0/{len(chunks)})..."
-                    ids = []
-                    docs = []
-                    metadatas = []
+                self._index_text(filename, text)
 
-                    for i, chunk_data in enumerate(chunks):
-                        chunk_text, clause_num = chunk_data
-                        cid = f"{filename}_{i}"
-                        ids.append(cid)
-                        docs.append(chunk_text)
-                        metadatas.append({
-                            "filename": filename,
-                            "clause": clause_num or "",
-                            "index": i,
-                            "mode": "chunked",
-                            "timestamp": datetime.datetime.now().isoformat()
-                        })
-                        if (i + 1) % 5 == 0 or i == len(chunks) - 1:
-                            self._processing_progress[filename] = f"Generating embeddings ({i+1}/{len(chunks)})..."
+            elif ext in _IMAGE_EXTS:
+                # Images — send to Gemini vision for content extraction, then index the text
+                self._processing_progress[filename] = "Analyzing image with Gemini..."
+                try:
+                    image_bytes = file_path.read_bytes()
+                    mime = _IMAGE_MIME.get(ext, "image/jpeg")
+                    text = GeminiService().extract_text_from_image(image_bytes, mime)
+                except Exception as e:
+                    print(f"[DOCUMENT SERVICE] Image extraction error for {filename}: {e}")
+                    self._processing_status[filename] = "failed"
+                    self._processing_progress[filename] = f"فشل تحليل الصورة: {e}"
+                    return
 
-                self.vector_store.add_documents(ids, docs, metadatas)
-                self._processing_status[filename] = "indexed"
-                mode_label = "full-injection (small)" if is_small else f"chunked ({len(docs)} chunks)"
-                self._processing_progress[filename] = f"Indexed: {mode_label}."
+                if not text.strip():
+                    self._processing_status[filename] = "failed"
+                    self._processing_progress[filename] = "لم يستطع النموذج استخراج محتوى من هذه الصورة."
+                    return
 
-                # Extract structured records from text (for aggregation queries)
-                records = extract_records(text, filename)
-                if records:
-                    self.record_store.store(filename, records)
-                    print(f"[DOCUMENT SERVICE] Extracted {len(records)} structured records from {filename}")
+                self._index_text(filename, text)
+
             else:
                 self._processing_status[filename] = "failed"
                 self._processing_progress[filename] = "Unsupported file format."
@@ -338,6 +338,60 @@ class DocumentService:
             print(f"[DOCUMENT SERVICE] Processing error for {filename}: {e}")
             self._processing_status[filename] = "failed"
             self._processing_progress[filename] = str(e)
+
+    def _index_text(self, filename: str, text: str):
+        """
+        Index extracted text into the vector store.
+        Small documents use full-injection; large documents are chunked.
+        Also extracts structured records for aggregation queries.
+        """
+        is_small = len(text) <= SMALL_DOC_THRESHOLD
+
+        if is_small:
+            self._processing_progress[filename] = "Small document — storing full text for direct injection..."
+            docs = [text]
+            metadatas = [{
+                "filename": filename,
+                "clause": "",
+                "index": 0,
+                "mode": "full_injection",
+                "char_count": len(text),
+                "timestamp": datetime.datetime.now().isoformat()
+            }]
+            ids = [f"{filename}_full"]
+        else:
+            self._processing_progress[filename] = "Chunking text..."
+            chunks = self._chunk_text(text)
+            self._processing_progress[filename] = f"Generating embeddings (0/{len(chunks)})..."
+            ids = []
+            docs = []
+            metadatas = []
+
+            for i, chunk_data in enumerate(chunks):
+                chunk_text, clause_num = chunk_data
+                cid = f"{filename}_{i}"
+                ids.append(cid)
+                docs.append(chunk_text)
+                metadatas.append({
+                    "filename": filename,
+                    "clause": clause_num or "",
+                    "index": i,
+                    "mode": "chunked",
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                if (i + 1) % 5 == 0 or i == len(chunks) - 1:
+                    self._processing_progress[filename] = f"Generating embeddings ({i+1}/{len(chunks)})..."
+
+        self.vector_store.add_documents(ids, docs, metadatas)
+        self._processing_status[filename] = "indexed"
+        mode_label = "full-injection (small)" if is_small else f"chunked ({len(docs)} chunks)"
+        self._processing_progress[filename] = f"Indexed: {mode_label}."
+
+        # Extract structured records from text (for aggregation queries)
+        records = extract_records(text, filename)
+        if records:
+            self.record_store.store(filename, records)
+            print(f"[DOCUMENT SERVICE] Extracted {len(records)} structured records from {filename}")
 
     def _chunk_text(self, text: str) -> List[Tuple[str, Optional[str]]]:
         """
