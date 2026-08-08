@@ -14,6 +14,6 @@ class HealthResponse(BaseModel):
 async def get_health():
     return HealthResponse(
         status="healthy",
-        project="مستفيد",
+        project="ايفورا",
         version="0.1.0"
     )

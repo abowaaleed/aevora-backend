@@ -70,7 +70,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _playPreview(String voiceId) async {
     setState(() => _loadingVoiceId = voiceId);
     try {
-      final text = "مرحباً! هذا عرض مسبق لصوتي في مستفيد.";
+      final text = "مرحباً! هذا عرض مسبق لصوتي في ايفورا.";
       
       final rateStr = _getRateString(_speed);
       final pitchStr = _getPitchString(_pitch);

@@ -32,7 +32,7 @@ class ChatResponse(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "reply": "أنا مستفيد. محرك الذكاء الاصطناعي يعمل.",
+                "reply": "أنا ايفورا. محرك الذكاء الاصطناعي يعمل.",
                 "skill_used": "quick"
             }
         }

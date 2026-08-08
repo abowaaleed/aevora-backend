@@ -16,8 +16,8 @@ from app.runtime.stages import (
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
-    title="مستفيد",
-    description="مساعد زراعي ذكي للإجابة على الأسئلة بناءً على المستندات المرفوعة",
+    title="ايفورا",
+    description="مساعد ذكي للإجابة على الأسئلة بناءً على المستندات المرفوعة",
     version="1.0.0"
 )
 

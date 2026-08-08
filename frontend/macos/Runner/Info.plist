@@ -29,6 +29,6 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>مستفيد يحتاج صلاحية الميكروفون لتسجيل الرسائل الصوتية وتحويلها إلى نص.</string>
+	<string>ايفورا يحتاج صلاحية الميكروفون لتسجيل الرسائل الصوتية وتحويلها إلى نص.</string>
 </dict>
 </plist>

@@ -60,7 +60,7 @@ class BuildPromptStage(Stage):
         recent = history[-6:] if history else []
         history_str = ""
         for msg in recent:
-            role = "المستخدم" if msg["role"] == "user" else "مستفيد"
+            role = "المستخدم" if msg["role"] == "user" else "ايفورا"
             history_str += f"{role}: {msg['content']}\n"
 
         # Build minimal prompt

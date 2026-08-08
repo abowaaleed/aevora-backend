@@ -289,7 +289,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
                               ),
                               const SizedBox(height: 8),
                               const Text(
-                                'ارفع ملفات لبناء قاعدة معرفة مستفيد',
+                                'ارفع ملفات لبناء قاعدة معرفة ايفورا',
                                 style: TextStyle(color: Colors.white30, fontSize: 13),
                               ),
                             ],

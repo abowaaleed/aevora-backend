@@ -13,16 +13,16 @@ void main() async {
   };
 
   // Run the app immediately to show the UI
-  runApp(const MustafeedApp());
+  runApp(const AevoraApp());
 }
 
-class MustafeedApp extends StatelessWidget {
-  const MustafeedApp({super.key});
+class AevoraApp extends StatelessWidget {
+  const AevoraApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'مستفيد',
+      title: 'ايفورا',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         colorScheme: ColorScheme.dark(

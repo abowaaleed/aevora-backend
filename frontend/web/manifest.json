@@ -1,11 +1,11 @@
 {
-    "name": "مستفيد",
-    "short_name": "مستفيد",
+    "name": "ايفورا",
+    "short_name": "ايفورا",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#2D6B35",
     "theme_color": "#2D6B35",
-    "description": "مساعد زراعي ذكي للإجابة على الأسئلة بناءً على المستندات المرفوعة",
+    "description": "مساعد ذكي للإجابة على الأسئلة بناءً على المستندات المرفوعة",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -10,11 +10,11 @@ class ModeManager {
   String get selectedSkill => 'quick';
 
   Future<void> load() async {
-    // No-op: Mustafeed has a single mode
+    // No-op: Evora has a single mode
   }
 
   Future<void> selectMode(dynamic mode) async {
-    // No-op: Mustafeed has a single mode
+    // No-op: Evora has a single mode
   }
 
   Future<bool> hasSelectedMode() async {

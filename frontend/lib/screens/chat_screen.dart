@@ -102,7 +102,7 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
           await _audioPlayer.play(BytesSource(synthRes.bodyBytes));
         } else {
           final tempDir = await getTemporaryDirectory();
-          final playPath = '${tempDir.path}/mustafeed_replay_${DateTime.now().millisecondsSinceEpoch}_${rate ?? "normal"}.mp3';
+          final playPath = '${tempDir.path}/evora_replay_${DateTime.now().millisecondsSinceEpoch}_${rate ?? "normal"}.mp3';
           final playFile = File(playPath);
           await playFile.writeAsBytes(synthRes.bodyBytes);
           
@@ -164,9 +164,9 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
       String recordPath = '';
       if (!kIsWeb) {
         final tempDir = await getTemporaryDirectory();
-        recordPath = '${tempDir.path}/mustafeed_voice_${DateTime.now().millisecondsSinceEpoch}.wav';
+        recordPath = '${tempDir.path}/evora_voice_${DateTime.now().millisecondsSinceEpoch}.wav';
       } else {
-        recordPath = 'mustafeed_voice.wav';
+        recordPath = 'evora_voice.wav';
       }
       await _audioRecorder.start(
         const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000),
@@ -349,7 +349,7 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
         await _audioPlayer.play(BytesSource(synthRes.bodyBytes));
       } else {
         final tempDir = await getTemporaryDirectory();
-        playPath = '${tempDir.path}/mustafeed_response_${DateTime.now().millisecondsSinceEpoch}.mp3';
+        playPath = '${tempDir.path}/evora_response_${DateTime.now().millisecondsSinceEpoch}.mp3';
         final playFile = File(playPath);
         await playFile.writeAsBytes(synthRes.bodyBytes);
         await _audioPlayer.play(DeviceFileSource(playPath));
@@ -531,7 +531,7 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
   void _seedWelcomeMessage() {
     if (_messages.isNotEmpty) return;
     _messages.add(_createMessage(
-      text: 'مرحباً بك في مستفيد! أنا مساعدك الزراعي الذكي.\n\nارفع مستنداتك ثم اسأل عن أي معلومات تريد معرفتها.',
+      text: 'مرحباً بك في ايفورا! أنا مساعدك الذكي.\n\nارفع مستنداتك ثم اسأل عن أي معلومات تريد معرفتها.',
       isUser: false,
     ));
   }
@@ -555,7 +555,7 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
               decoration: BoxDecoration(color: Color(0xFF1D3A1D)),
               child: Center(
                 child: Text(
-                  'مستفيد',
+                  'ايفورا',
                   style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
                 ),
               ),
@@ -617,11 +617,11 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'مستفيد',
+                    'ايفورا',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                   Text(
-                    'مساعد زراعي ذكي',
+                    'مساعد ذكي',
                     style: TextStyle(
                       color: Color(0xFF81C784),
                       fontSize: 11,
@@ -674,7 +674,7 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'مستفيد',
+                        'ايفورا',
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
                       ),
                       SizedBox(height: 4),
