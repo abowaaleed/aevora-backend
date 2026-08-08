@@ -3,11 +3,15 @@ from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any
 from app.rag.document_service import DocumentService
 from app.providers.gemini_provider import GeminiProvider
+from app.services.smart_router import SmartRouter
 import json
 import os
+import asyncio
+from pathlib import Path
 
 router = APIRouter()
 doc_service = DocumentService()
+smart_router = SmartRouter()
 
 def get_gemini_provider() -> GeminiProvider:
     return GeminiProvider()
@@ -18,15 +22,43 @@ async def summarize_document(
     gemini_provider: GeminiProvider = Depends(get_gemini_provider)
 ):
     """
-    Summarize a PDF document using Gemini's native PDF support.
+    Summarize an uploaded file.
+    Text is extracted locally first, then summarized via the smart router
+    (Gemini primary, Groq fallback). Scanned PDFs without extractable text
+    are sent to Gemini's native PDF support instead.
     """
-    # Save file locally first to upload to Gemini
+    # Save file locally first
     temp_path = f"data/uploads/temp_{file.filename}"
     with open(temp_path, "wb") as f:
         f.write(await file.read())
 
     async def event_generator():
         try:
+            text = ""
+            ext = Path(temp_path).suffix.lower()
+            try:
+                if ext == ".pdf":
+                    import fitz
+                    doc = fitz.open(temp_path)
+                    for page in doc:
+                        text += page.get_text()
+                elif ext == ".txt":
+                    with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text = f.read()
+                elif ext == ".docx":
+                    import docx
+                    d = docx.Document(temp_path)
+                    text = "\n".join(p.text for p in d.paragraphs)
+            except Exception as te:
+                print(f"[RAG API] Local text extraction error: {te}")
+
+            if len(text.strip()) >= 20:
+                summary = await asyncio.to_thread(smart_router.summarize_text, text)
+                yield f"data: {json.dumps({'text': summary})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            # No extractable text (e.g. scanned PDF) — use Gemini's native PDF support.
             async for chunk in gemini_provider.service.process_pdf_and_summarize(temp_path):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
             yield "data: [DONE]\n\n"

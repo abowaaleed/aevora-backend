@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from app.models.chat import ChatRequest, ChatResponse
 from app.services.conversation_manager import ConversationManager
 from app.providers.gemini_provider import GeminiProvider
+from app.services.smart_router import SmartRouter
 from app.runtime import Runtime
 from app.prompt_engine import Skill
 from app.api.rag import doc_service
@@ -10,6 +11,9 @@ import json
 import asyncio
 
 router = APIRouter()
+
+# Smart router: Gemini primary, Groq fallback (activates when GROQ_API_KEY is set).
+smart_router = SmartRouter()
 
 # Dependency to get GeminiProvider directly for streaming
 def get_gemini_provider() -> GeminiProvider:
@@ -52,12 +56,12 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
-    gemini_provider: GeminiProvider = Depends(get_gemini_provider)
 ):
     """
-    Streaming chat endpoint with RAG support.
+    Streaming chat endpoint with RAG + smart routing.
     Runs a document lookup first; if relevant content is found it is injected
     into the prompt so the model answers from the uploaded documents.
+    Gemini is the primary model; if it fails (e.g. quota), Groq takes over.
     Yields SSE events in the format expected by the Flutter client:
         data: {"text": "..."}\n\n
     and terminates with:
@@ -90,9 +94,7 @@ async def chat_stream(
             if direct_answer:
                 yield f"data: {json.dumps({'text': direct_answer})}\n\n"
             else:
-                async for chunk in gemini_provider.service.stream_evora_response(
-                    request.message, knowledge=knowledge
-                ):
+                async for chunk in smart_router.stream(request.message, knowledge=knowledge):
                     yield f"data: {json.dumps({'text': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:

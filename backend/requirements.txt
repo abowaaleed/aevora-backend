@@ -13,5 +13,6 @@ pydantic-settings==2.14.2
 fastapi==0.139.0
 uvicorn==0.50.0
 python-multipart==0.0.20
+requests==2.32.3
 # audioop was removed in Python 3.13 (hence the marker). Python 3.12 ships it built-in.
 audioop-lts; python_version >= "3.13"

@@ -5,14 +5,15 @@ from typing import List, Dict, Any, Optional
 import google.generativeai as genai
 import os
 
-import google.generativeai as genai
-import os
+EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_DIM = 3072
+EMBEDDING_VERSION = "gemini-embedding-001"
 
 class GeminiEmbeddingFunction(EmbeddingFunction):
     """
     Custom embedding function using Google Gemini API.
     """
-    def __init__(self, model_name: str = "models/text-embedding-004"):
+    def __init__(self, model_name: str = EMBEDDING_MODEL):
         self.model_name = model_name
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
@@ -29,8 +30,8 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         except Exception as e:
             print(f"[VECTOR STORE] Gemini Embedding error: {e}")
             # Fallback to zero vector if embedding fails
-            # text-embedding-004 is 768 dimensions
-            return [[0.0] * 768 for _ in input]
+            # gemini-embedding-001 is 3072 dimensions
+            return [[0.0] * EMBEDDING_DIM for _ in input]
 
 class LocalVectorStore:
     """
@@ -43,8 +44,21 @@ class LocalVectorStore:
         self.collection = self.client.get_or_create_collection(
             name="documents",
             embedding_function=self.embedding_function,
-            metadata={"hnsw:space": "cosine"}
+            metadata={"hnsw:space": "cosine", "embedding_version": EMBEDDING_VERSION}
         )
+        # Recreate the collection if the embedding model changed (dimension mismatch).
+        meta = self.collection.metadata or {}
+        if meta.get("embedding_version") != EMBEDDING_VERSION:
+            print(f"[VECTOR STORE] Embedding model changed — recreating collection (old={meta.get('embedding_version')}, new={EMBEDDING_VERSION})")
+            try:
+                self.client.delete_collection("documents")
+            except Exception:
+                pass
+            self.collection = self.client.get_or_create_collection(
+                name="documents",
+                embedding_function=self.embedding_function,
+                metadata={"hnsw:space": "cosine", "embedding_version": EMBEDDING_VERSION}
+            )
 
     def add_documents(self, ids: List[str], documents: List[str], metadatas: List[Dict[str, Any]]):
         """Add chunks to the vector store."""

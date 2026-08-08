@@ -570,27 +570,32 @@ class DocumentService:
         small_docs = self._get_small_doc_contents()
         if small_docs:
             print(f"[RAG] Found {len(small_docs)} small document(s) for full injection")
-            
+
             combined_answer = ""
             sources = []
+            # If the query has no Arabic words to score sections with, fall back
+            # to injecting the full document text (can't rank by keyword overlap).
+            query_arabic_words = set(re.findall(r'[\u0600-\u06FF]{3,}', user_query.lower()))
+
             for fname, full_text in small_docs.items():
                 # Section-boundary-aware injection: split by headings,
                 # score each section against the query, inject only relevant ones
                 sections = _split_into_sections(full_text)
-                
-                if len(sections) <= 1:
-                    # No clear sections — inject full text
+
+                if len(sections) <= 1 or not query_arabic_words:
+                    # No clear sections, or no Arabic words to score with — inject full text
                     combined_answer += f"[المستند: {fname}]\n{full_text}\n\n"
+                    sources.append(fname)
                 else:
                     # Score each section and pick the best matching one(s)
                     scored = []
                     for header, body in sections:
                         score = _score_section_relevance(header, body, user_query)
                         scored.append((score, header, body))
-                    
+
                     # Sort by relevance score descending
                     scored.sort(key=lambda x: x[0], reverse=True)
-                    
+
                     # Inject ONLY the single best-matching section to prevent cross-contamination
                     best_score = scored[0][0]
                     injected_sections = []
@@ -598,17 +603,16 @@ class DocumentService:
                         score, header, body = scored[0]
                         section_text = f"### {header}:\n{body}" if header else body
                         injected_sections.append(section_text)
-                    
+
                     if not injected_sections:
                         # Only inject full text if this is the ONLY document
                         # and no other document had matching sections
                         pass  # Skip this document entirely — it's not relevant
                     else:
                         combined_answer += f"[المستند: {fname}]\n" + "\n\n".join(injected_sections) + "\n\n"
+                        sources.append(fname)
                         print(f"[RAG] Injected {len(injected_sections)}/{len(sections)} sections from {fname} "
                               f"(best score: {best_score:.2f})")
-                
-                sources.append(fname)
 
             # Also add large doc chunks if relevant
             large_results = self.vector_store.search(user_query, limit=LARGE_DOC_TOP_K)
@@ -621,11 +625,13 @@ class DocumentService:
                     if fn not in sources:
                         sources.append(fn)
 
-            return {
-                "type": "full_injection",
-                "answer": combined_answer.strip(),
-                "sources": sources
-            }
+            if combined_answer.strip():
+                return {
+                    "type": "full_injection",
+                    "answer": combined_answer.strip(),
+                    "sources": sources
+                }
+            # Nothing relevant was injected — fall through to the other retrieval paths.
 
         # 1. Check for explicit clause number (Fix for "البند 203")
         clause_match = re.search(r'(?:البند|المادة|الفقرة|Clause|Article|Section)\s*(\d+(?:\.\d+)*)', user_query)

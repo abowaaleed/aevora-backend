@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from app.api import health, chat
-from app.providers.gemini_provider import GeminiProvider
+from app.providers.smart_provider import SmartProvider
 from app.services.ai_engine import AIEngine
 from app.services.conversation_manager import ConversationManager
 from app.prompt_engine import PromptLoader, SystemPrompt, PromptBuilder
@@ -31,11 +31,11 @@ app.add_middleware(
 
 
 # Dependency Injection
-def get_ai_provider() -> GeminiProvider:
-    return GeminiProvider()
+def get_ai_provider() -> SmartProvider:
+    return SmartProvider()
 
-def get_ollama_provider() -> GeminiProvider:
-    return GeminiProvider()
+def get_ollama_provider() -> SmartProvider:
+    return SmartProvider()
 
 
 def get_prompt_loader() -> PromptLoader:
@@ -52,7 +52,7 @@ def get_prompt_builder(
     return PromptBuilder(system_prompt=system_prompt)
 
 
-def get_ai_engine(provider: GeminiProvider = Depends(get_ollama_provider)) -> AIEngine:
+def get_ai_engine(provider: SmartProvider = Depends(get_ollama_provider)) -> AIEngine:
     return AIEngine(provider=provider)
 
 
