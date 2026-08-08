@@ -221,14 +221,22 @@ class _ChatScreenState extends State<ChatScreen> with SingleTickerProviderStateM
       }
       
       final transcribeUrl = '$backendUrl/voice/transcribe';
-      final uploadReq = http.MultipartRequest('POST', Uri.parse(transcribeUrl));
-      uploadReq.files.add(http.MultipartFile.fromBytes(
-        'file',
-        audioBytes,
-        filename: 'voice_query.wav',
-      ));
       
-      final uploadRes = await uploadReq.send();
+      http.StreamedResponse uploadRes;
+      var transcribeAttempt = 0;
+      while (true) {
+        transcribeAttempt++;
+        final uploadReq = http.MultipartRequest('POST', Uri.parse(transcribeUrl));
+        uploadReq.files.add(http.MultipartFile.fromBytes(
+          'file',
+          audioBytes,
+          filename: 'voice_query.wav',
+        ));
+        uploadRes = await uploadReq.send().timeout(const Duration(minutes: 2));
+        if (uploadRes.statusCode < 500 || transcribeAttempt >= 3) break;
+        debugPrint('Transcribe attempt $transcribeAttempt failed (${uploadRes.statusCode}), retrying...');
+        await Future.delayed(Duration(seconds: 2 * transcribeAttempt));
+      }
       if (uploadRes.statusCode != 200) {
         throw Exception("Transcription failed: ${uploadRes.statusCode}");
       }

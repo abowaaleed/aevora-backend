@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
@@ -29,7 +30,9 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
   Future<void> _fetchFiles() async {
     setState(() => _isLoading = true);
     try {
-      final res = await http.get(Uri.parse('$backendUrl/rag/files'));
+      final res = await http
+          .get(Uri.parse('$backendUrl/rag/files'))
+          .timeout(const Duration(seconds: 30));
       if (res.statusCode == 200) {
         setState(() => _files = jsonDecode(res.body));
       }
@@ -38,6 +41,45 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  // Wakes a cold Render free instance before uploading, so the first upload
+  // doesn't hit a 502 while the instance is spinning up.
+  Future<void> _wakeBackend() async {
+    try {
+      await http
+          .get(Uri.parse('$backendUrl/health/'))
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {}
+  }
+
+  // Sends the upload request with a generous timeout and retries transient
+  // failures (502 from a cold instance / network blips). The multipart request
+  // is rebuilt on every attempt because its stream can only be sent once.
+  Future<http.StreamedResponse> _uploadWithRetry(
+    String filename,
+    Uint8List? bytes,
+    String? path,
+  ) async {
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final request = http.MultipartRequest('POST', Uri.parse('$backendUrl/rag/upload'));
+        if (bytes != null) {
+          request.files.add(http.MultipartFile.fromBytes('files', bytes, filename: filename));
+        } else if (path != null) {
+          request.files.add(await http.MultipartFile.fromPath('files', path, filename: filename));
+        }
+        final res = await request.send().timeout(const Duration(minutes: 3));
+        if (res.statusCode < 500) return res;
+        debugPrint('Upload attempt $attempt failed (${res.statusCode}), retrying...');
+      } catch (e) {
+        debugPrint('Upload attempt $attempt error: $e');
+        if (attempt == maxAttempts) rethrow;
+      }
+      await Future.delayed(Duration(seconds: 2 * attempt));
+    }
+    throw Exception('Upload failed after $maxAttempts attempts');
   }
 
   Future<void> _pickAndUploadFiles() async {
@@ -51,30 +93,15 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
     );
 
     if (result != null && result.files.isNotEmpty) {
+      await _wakeBackend();
       for (var file in result.files) {
         setState(() {
           _isUploading = true;
           _uploadingFileName = file.name;
         });
         try {
-          final uploadUrl = Uri.parse('$backendUrl/rag/upload');
-          final request = http.MultipartRequest('POST', uploadUrl);
-          
-          if (file.bytes != null) {
-            request.files.add(http.MultipartFile.fromBytes(
-              'files',
-              file.bytes!,
-              filename: file.name,
-            ));
-          } else if (file.path != null) {
-            request.files.add(await http.MultipartFile.fromPath(
-              'files',
-              file.path!,
-              filename: file.name,
-            ));
-          }
+          final response = await _uploadWithRetry(file.name, file.bytes, file.path);
 
-          final response = await request.send();
           if (response.statusCode == 200) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(

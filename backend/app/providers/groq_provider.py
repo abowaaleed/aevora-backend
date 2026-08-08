@@ -14,6 +14,7 @@ from app.providers.base_provider import BaseProvider
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_STT_MODEL = "whisper-large-v3-turbo"
 
 
 class GroqProvider(BaseProvider):
@@ -119,3 +120,24 @@ class GroqProvider(BaseProvider):
                         yield delta
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
+
+    def transcribe_audio(self, audio_bytes: bytes, filename: str = "audio.wav") -> str:
+        """
+        Speech-to-text via Groq's hosted Whisper (fast, no local model needed).
+        Returns the transcribed text, or raises on failure.
+        """
+        self._check_available()
+        url = f"{GROQ_BASE_URL}/audio/transcriptions"
+        files = {"file": (filename or "audio.wav", audio_bytes)}
+        data = {"model": GROQ_STT_MODEL, "language": "ar"}
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            files=files,
+            data=data,
+            timeout=120,
+        )
+        resp.encoding = "utf-8"
+        resp.raise_for_status()
+        result = resp.json()
+        return (result.get("text") or "").strip()

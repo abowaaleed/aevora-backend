@@ -3,35 +3,89 @@ from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import google.generativeai as genai
+import hashlib
+import json
+import math
 import os
+import re
 
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 EMBEDDING_DIM = 3072
-EMBEDDING_VERSION = "gemini-embedding-001"
+EMBEDDING_VERSION = "evora-v2"
+
+_MODE_FILE = Path(__file__).parent.parent.parent / "data" / "embedding_mode.json"
+
+
+def _hash_embed(text: str, dim: int = EMBEDDING_DIM) -> List[float]:
+    """
+    Deterministic keyword-hash embedding used when the Gemini embedding API is
+    unavailable (e.g. free-tier quota exhausted). Fixed dimension, normalized.
+    Two texts sharing Arabic/English words get high cosine similarity, which
+    keeps RAG retrieval functional even without the semantic model.
+    """
+    vec = [0.0] * dim
+    tokens = re.findall(r'[\u0600-\u06FF]{2,}|[a-zA-Z0-9]{2,}', text.lower())
+    for tok in tokens:
+        grams = {tok}
+        if len(tok) > 3:
+            grams.update(tok[i:i + 3] for i in range(len(tok) - 2))
+        for g in grams:
+            h = int.from_bytes(hashlib.md5(g.encode("utf-8")).digest()[:8], "big")
+            idx = h % dim
+            sign = 1.0 if (h >> 7) & 1 else -1.0
+            vec[idx] += sign
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / norm for v in vec]
+
 
 class GeminiEmbeddingFunction(EmbeddingFunction):
     """
-    Custom embedding function using Google Gemini API.
+    Custom embedding function using the Google Gemini API, with a
+    deterministic keyword-hash fallback.
+
+    If Gemini fails on the first call (quota/network), the process switches to
+    hash mode for the rest of its lifetime so all vectors in a collection stay
+    mutually consistent (no mixing of semantic + keyword vectors).
     """
+
     def __init__(self, model_name: str = EMBEDDING_MODEL):
         self.model_name = model_name
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
             genai.configure(api_key=api_key)
+        self._mode = self._load_mode()
+
+    @staticmethod
+    def _load_mode() -> str:
+        try:
+            return json.loads(_MODE_FILE.read_text(encoding="utf-8")).get("mode", "gemini")
+        except Exception:
+            return "gemini"
+
+    @staticmethod
+    def _save_mode(mode: str):
+        try:
+            _MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _MODE_FILE.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        except Exception as e:
+            print(f"[VECTOR STORE] Could not persist embedding mode: {e}")
 
     def __call__(self, input: Documents) -> Embeddings:
-        try:
-            result = genai.embed_content(
-                model=self.model_name,
-                content=input,
-                task_type="retrieval_document"
-            )
-            return result['embedding']
-        except Exception as e:
-            print(f"[VECTOR STORE] Gemini Embedding error: {e}")
-            # Fallback to zero vector if embedding fails
-            # gemini-embedding-001 is 3072 dimensions
-            return [[0.0] * EMBEDDING_DIM for _ in input]
+        inputs = list(input)
+        if self._mode == "gemini":
+            try:
+                result = genai.embed_content(
+                    model=self.model_name,
+                    content=inputs,
+                    task_type="retrieval_document"
+                )
+                emb = result['embedding']
+                return emb
+            except Exception as e:
+                print(f"[VECTOR STORE] Gemini Embedding error ({e}) — switching to keyword-hash fallback")
+                self._mode = "hash"
+                self._save_mode("hash")
+        return [_hash_embed(t) for t in inputs]
 
 class LocalVectorStore:
     """

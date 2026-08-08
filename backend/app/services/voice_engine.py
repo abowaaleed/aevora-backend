@@ -35,14 +35,21 @@ class VoiceEngine:
             print("[VOICE ENGINE] Empty audio bytes received")
             return ""
 
-        # Prefer Gemini on Render (cloud, fast); use faster-whisper locally unless overridden.
+        # Prefer Gemini on Render (cloud, fast); use Groq Whisper as the fallback
+        # when Gemini is unavailable/quota-exhausted; local faster-whisper last.
         engine = os.getenv("STT_ENGINE", "gemini" if os.getenv("RENDER") else "whisper")
         if engine == "gemini":
             text = self._transcribe_gemini(audio_bytes)
             if text:
                 print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Gemini)")
                 return text
-            print("[VOICE ENGINE] Gemini transcription empty/failed, falling back to faster-whisper")
+            print("[VOICE ENGINE] Gemini transcription empty/failed, trying Groq Whisper fallback")
+
+        text = self._transcribe_groq(audio_bytes)
+        if text:
+            print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Groq Whisper)")
+            return text
+        print("[VOICE ENGINE] Groq Whisper unavailable/failed, falling back to faster-whisper")
 
         # Write input bytes to a temporary file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
@@ -106,6 +113,32 @@ class VoiceEngine:
             return text
         except Exception as e:
             print(f"[VOICE ENGINE] Gemini transcription failed: {e}")
+            return ""
+
+    def _transcribe_groq(self, audio_bytes: bytes) -> str:
+        """Transcribe audio using Groq's hosted Whisper (cloud fallback)."""
+        try:
+            from app.providers.groq_provider import GroqProvider
+            provider = GroqProvider()
+            if not provider.available:
+                print("[VOICE ENGINE] Groq API key not set — skipping Groq Whisper")
+                return ""
+            payload = audio_bytes
+            filename = "evora_audio.wav"
+            # Groq Whisper expects common audio formats (mp3/wav/m4a/ogg/flac).
+            # Normalize anything else (e.g. AIFF from the 'say' fallback) to WAV.
+            try:
+                from pydub import AudioSegment
+                import io as _io
+                sound = AudioSegment.from_file(_io.BytesIO(audio_bytes))
+                wav_buf = _io.BytesIO()
+                sound.set_frame_rate(16000).set_channels(1).export(wav_buf, format="wav")
+                payload = wav_buf.getvalue()
+            except Exception as ne:
+                print(f"[VOICE ENGINE] pydub normalization skipped for Groq: {ne}")
+            return provider.transcribe_audio(payload, filename=filename)
+        except Exception as e:
+            print(f"[VOICE ENGINE] Groq Whisper transcription failed: {e}")
             return ""
 
     def _clean_text_for_tts(self, text: str) -> str:

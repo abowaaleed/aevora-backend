@@ -162,6 +162,23 @@ def _score_section_relevance(header: str, body: str, query: str) -> float:
     return score
 
 
+def _score_doc_relevance(full_text: str, query: str) -> float:
+    """
+    Score how relevant an entire document is to the query based on keyword
+    overlap. Weights query-word matches by length so rarer (more specific)
+    terms such as 'السجل التجاري' dominate over common filler words.
+    """
+    query_words = set(re.findall(r'[\u0600-\u06FF]{3,}', query.lower()))
+    if not query_words:
+        return 0.0
+    text = full_text.lower()
+    total = 0.0
+    for w in query_words:
+        if w in text:
+            total += 1.0 + min(len(w) / 20.0, 1.0)
+    return total / len(query_words)
+
+
 class DocumentService:
     """
     Main service for document processing and RAG operations.
@@ -413,8 +430,7 @@ class DocumentService:
 
         # If no matches found, use simple paragraph splitting
         if len(splits) == 1:
-            paras = [p.strip() for p in text.split('\n\n') if p.strip()]
-            return [(p, None) for p in paras]
+            return self._chunk_by_paragraphs(text)
 
         # First part might be a preamble
         if splits[0].strip():
@@ -427,6 +443,35 @@ class DocumentService:
             full_content = f"Clause {clause_num}: {content}"
             chunks.append((full_content, clause_num))
 
+        return chunks
+
+    def _chunk_by_paragraphs(self, text: str) -> List[Tuple[str, Optional[str]]]:
+        """
+        Split text into reasonably-sized chunks. PDF extraction often produces a
+        newline per line (no blank paragraphs), so we fall back to accumulating
+        lines up to a target size with overlap — never one giant chunk.
+        """
+        TARGET = 900
+        OVERLAP = 150
+        paragraphs = [p for p in (p.strip() for p in text.split("\n")) if p]
+        if not paragraphs:
+            return []
+
+        chunks: List[Tuple[str, Optional[str]]] = []
+        current = ""
+        for para in paragraphs:
+            if not current:
+                current = para
+            elif len(current) + len(para) + 1 <= TARGET:
+                current += "\n" + para
+            else:
+                chunks.append((current, None))
+                # overlap: carry the tail of the previous chunk so numbers
+                # spanning chunk boundaries aren't lost
+                tail = current[-OVERLAP:] if len(current) > OVERLAP else ""
+                current = (tail + "\n" + para) if tail else para
+        if current:
+            chunks.append((current, None))
         return chunks
 
     def get_file_content(self, filename: str) -> Optional[str]:
@@ -573,46 +618,32 @@ class DocumentService:
 
             combined_answer = ""
             sources = []
-            # If the query has no Arabic words to score sections with, fall back
-            # to injecting the full document text (can't rank by keyword overlap).
+            # If the query has no Arabic words to score with, inject the full
+            # document text (can't rank by keyword overlap).
             query_arabic_words = set(re.findall(r'[\u0600-\u06FF]{3,}', user_query.lower()))
 
-            for fname, full_text in small_docs.items():
-                # Section-boundary-aware injection: split by headings,
-                # score each section against the query, inject only relevant ones
-                sections = _split_into_sections(full_text)
-
-                if len(sections) <= 1 or not query_arabic_words:
-                    # No clear sections, or no Arabic words to score with — inject full text
+            if not query_arabic_words:
+                # English / numeric queries — inject every small document in full
+                for fname, full_text in small_docs.items():
                     combined_answer += f"[المستند: {fname}]\n{full_text}\n\n"
                     sources.append(fname)
-                else:
-                    # Score each section and pick the best matching one(s)
-                    scored = []
-                    for header, body in sections:
-                        score = _score_section_relevance(header, body, user_query)
-                        scored.append((score, header, body))
-
-                    # Sort by relevance score descending
-                    scored.sort(key=lambda x: x[0], reverse=True)
-
-                    # Inject ONLY the single best-matching section to prevent cross-contamination
-                    best_score = scored[0][0]
-                    injected_sections = []
-                    if best_score > 0.3:
-                        score, header, body = scored[0]
-                        section_text = f"### {header}:\n{body}" if header else body
-                        injected_sections.append(section_text)
-
-                    if not injected_sections:
-                        # Only inject full text if this is the ONLY document
-                        # and no other document had matching sections
-                        pass  # Skip this document entirely — it's not relevant
-                    else:
-                        combined_answer += f"[المستند: {fname}]\n" + "\n\n".join(injected_sections) + "\n\n"
-                        sources.append(fname)
-                        print(f"[RAG] Injected {len(injected_sections)}/{len(sections)} sections from {fname} "
-                              f"(best score: {best_score:.2f})")
+            else:
+                # Arabic queries — rank documents by keyword overlap, then inject
+                # the best-matching document IN FULL (small docs fit the prompt).
+                # Injecting the entire document prevents false "not found" answers
+                # that section-trimming caused when the relevant fact sat in a
+                # section whose header scored low against the query.
+                scored = []
+                for fname, full_text in small_docs.items():
+                    score = _score_doc_relevance(full_text, user_query)
+                    scored.append((score, fname, full_text))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                # Always inject at least the top document so a relevant fact is
+                # never dropped just because scoring was conservative.
+                for rank, (score, fname, full_text) in enumerate(scored[:2]):
+                    combined_answer += f"[المستند: {fname}]\n{full_text}\n\n"
+                    sources.append(fname)
+                    print(f"[RAG] Injected full small document {fname} (rank {rank + 1}, score {score:.2f})")
 
             # Also add large doc chunks if relevant
             large_results = self.vector_store.search(user_query, limit=LARGE_DOC_TOP_K)
