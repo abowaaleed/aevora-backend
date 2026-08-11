@@ -182,12 +182,18 @@ def _score_doc_relevance(full_text: str, query: str) -> float:
 class DocumentService:
     """
     Main service for document processing and RAG operations.
+    Each user (uid) gets isolated storage under data/users/{uid}.
+    uid=None keeps the original global layout (private deployment).
     """
-    def __init__(self):
-        self.vector_store = LocalVectorStore()
-        self.structured_store = StructuredStore()
-        self.record_store = StructuredRecordStore()  # structured records from text extraction
-        self.upload_dir = Path(__file__).parent.parent.parent / "data" / "uploads"
+    def __init__(self, uid: str | None = None):
+        self.uid = uid
+        self.vector_store = LocalVectorStore(uid=uid)
+        self.structured_store = StructuredStore(uid=uid)
+        self.record_store = StructuredRecordStore(uid=uid)  # structured records from text extraction
+        if uid:
+            self.upload_dir = Path(__file__).parent.parent.parent / "data" / "users" / uid / "uploads"
+        else:
+            self.upload_dir = Path(__file__).parent.parent.parent / "data" / "uploads"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self._processing_status = {} # filename -> status (pending, processing, indexed, failed)
         self._processing_progress = {} # filename -> percentage/details
@@ -747,3 +753,15 @@ class DocumentService:
         except Exception:
             pass
         return small_docs
+
+
+# سجلّ لكل مستخدم — كل طلب يحصل على نسخته المعزولة
+_service_instances: Dict[str, DocumentService] = {}
+
+
+def get_document_service(uid: str | None = None) -> DocumentService:
+    """إرجاع DocumentService معزول لكل مستخدم (uid)، أو العام عند غيابه."""
+    key = uid or "__default__"
+    if key not in _service_instances:
+        _service_instances[key] = DocumentService(uid=uid)
+    return _service_instances[key]

@@ -8,8 +8,11 @@ class StructuredStore:
     """
     Wrapper for local SQLite storage for tabular data.
     """
-    def __init__(self):
-        self.db_path = Path(__file__).parent.parent.parent / "data" / "structured_data.db"
+    def __init__(self, uid: Optional[str] = None):
+        if uid:
+            self.db_path = Path(__file__).parent.parent.parent / "data" / "users" / uid / "structured_data.db"
+        else:
+            self.db_path = Path(__file__).parent.parent.parent / "data" / "structured_data.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_metadata_table()
 

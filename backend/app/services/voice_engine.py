@@ -38,6 +38,10 @@ class VoiceEngine:
         # Prefer Gemini on Render (cloud, fast); use Groq Whisper as the fallback
         # when Gemini is unavailable/quota-exhausted; local faster-whisper last.
         engine = os.getenv("STT_ENGINE", "gemini" if os.getenv("RENDER") else "whisper")
+        # لا تستعمل Gemini للصوت في النسخة العامة إلا إذا قدّم المستخدم مفتاح Gemini.
+        from app.core.user_context import current_gemini_key
+        if engine == "gemini" and not (current_gemini_key() or os.getenv("GEMINI_API_KEY")):
+            engine = "whisper"
         if engine == "gemini":
             text = self._transcribe_gemini(audio_bytes)
             if text:
@@ -100,15 +104,8 @@ class VoiceEngine:
         from app.services.gemini_service import GeminiService
         service = GeminiService()
         mime = "audio/wav" if audio_bytes.startswith(b"RIFF") else "audio/mpeg"
-        prompt = (
-            "Transcribe this audio exactly as spoken. "
-            "Output ONLY the transcribed text, with no extra words or punctuation changes."
-        )
         try:
-            response = service.model.generate_content(
-                [{"mime_type": mime, "data": audio_bytes}, prompt]
-            )
-            text = (response.text or "").strip()
+            text = service.transcribe_audio(audio_bytes, mime)
             print(f"[VOICE ENGINE] Gemini transcription complete in {time.time() - start_t:.3f}s: '{text[:120]}'")
             return text
         except Exception as e:

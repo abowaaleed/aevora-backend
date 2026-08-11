@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 
@@ -18,13 +21,106 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
   bool _isLoading = false;
   bool _isUploading = false;
   String? _uploadingFileName;
+  Directory? _localDir;
+  Set<String> _localFileNames = {};
 
   static const Color _greenPrimary = Color(0xFF4CAF50);
 
   @override
   void initState() {
     super.initState();
-    _fetchFiles();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _fetchFiles();
+    await _loadLocalNames();
+    unawaited(_syncLocalToCloud());
+  }
+
+  // Persistent folder inside the app's Documents directory (backed up on
+  // iOS), so uploaded files stay on the phone even if the cloud storage resets.
+  Future<Directory> _getLocalDir() async {
+    if (_localDir != null) return _localDir!;
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/evora_files');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    _localDir = dir;
+    return dir;
+  }
+
+  Future<void> _saveLocalCopy(PlatformFile file) async {
+    try {
+      final dir = await _getLocalDir();
+      final bytes = file.bytes ?? await File(file.path!).readAsBytes();
+      await File('${dir.path}/${file.name}').writeAsBytes(bytes, flush: true);
+      setState(() => _localFileNames.add(file.name));
+    } catch (e) {
+      debugPrint('Failed to save local copy of ${file.name}: $e');
+    }
+  }
+
+  Future<void> _loadLocalNames() async {
+    try {
+      final dir = await _getLocalDir();
+      final names = dir.listSync().whereType<File>().map((f) => f.uri.pathSegments.last).toSet();
+      if (mounted) setState(() => _localFileNames = names);
+    } catch (e) {
+      debugPrint('Error listing local files: $e');
+    }
+  }
+
+  Future<void> _deleteLocalCopy(String filename) async {
+    try {
+      final dir = await _getLocalDir();
+      final f = File('${dir.path}/$filename');
+      if (await f.exists()) await f.delete();
+      setState(() => _localFileNames.remove(filename));
+    } catch (e) {
+      debugPrint('Failed to delete local copy of $filename: $e');
+    }
+  }
+
+  // Re-uploads any locally saved file missing from the cloud, so documents
+  // survive storage resets on the free Render plan.
+  Future<void> _syncLocalToCloud() async {
+    try {
+      final cloudNames = _files
+          .map((f) => f['filename'] as String? ?? '')
+          .where((n) => n.isNotEmpty)
+          .toSet();
+      final dir = await _getLocalDir();
+      final localFiles = dir.listSync().whereType<File>().toList();
+      final missing =
+          localFiles.where((f) => !cloudNames.contains(f.uri.pathSegments.last)).toList();
+      if (missing.isEmpty) return;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('جارِ استعادة ${missing.length} ملف من جهازك...')),
+        );
+      }
+      await _wakeBackend();
+      var restored = 0;
+      for (final f in missing) {
+        try {
+          final res = await _uploadWithRetry(f.uri.pathSegments.last, null, f.path);
+          if (res.statusCode == 200) restored++;
+        } catch (e) {
+          debugPrint('Restore failed for ${f.uri.pathSegments.last}: $e');
+        }
+      }
+      if (restored > 0) {
+        await _fetchFiles();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('تم استعادة $restored ملف من جهازك')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Local sync error: $e');
+    }
   }
 
   Future<void> _fetchFiles() async {
@@ -100,6 +196,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
           _uploadingFileName = file.name;
         });
         try {
+          await _saveLocalCopy(file);
           final response = await _uploadWithRetry(file.name, file.bytes, file.path);
 
           if (response.statusCode == 200) {
@@ -128,6 +225,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
         _isUploading = false;
         _uploadingFileName = null;
       });
+      await _loadLocalNames();
       _fetchFiles();
     }
   }
@@ -142,7 +240,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
 
     try {
       final res = await http.get(Uri.parse('$backendUrl/rag/files/${Uri.encodeComponent(filename)}/content'));
-      Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop();
 
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
@@ -207,7 +305,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
         }
       }
     } catch (e) {
-      Navigator.of(context).pop();
+      if (mounted) Navigator.of(context).pop();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e')));
       }
@@ -237,6 +335,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
     if (confirmed == true) {
       try {
         await http.delete(Uri.parse('$backendUrl/rag/files/${Uri.encodeComponent(filename)}'));
+        await _deleteLocalCopy(filename);
         _fetchFiles();
       } catch (e) {
         if (mounted) {
@@ -279,7 +378,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'ارفع ملفات PDF أو Word أو جداول البيانات أو الصور للإجابة عنها',
+                    'ارفع ملفات PDF أو Word أو جداول البيانات أو الصور — تُحفظ على جهازك وتُستعاد تلقائياً',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white70),
                   ),
                 ],
@@ -316,7 +415,7 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
                               ),
                               const SizedBox(height: 8),
                               const Text(
-                                'ارفع ملفات لبناء قاعدة معرفة ايفورا',
+                                'ارفع ملفات لبناء قاعدة معرفة ايفورا — وستبقى محفوظة على جهازك',
                                 style: TextStyle(color: Colors.white30, fontSize: 13),
                               ),
                             ],
@@ -386,6 +485,19 @@ class _DocumentManagerScreenState extends State<DocumentManagerScreen> {
                                                 progress.isNotEmpty ? progress : status.toUpperCase(),
                                                 style: const TextStyle(color: Colors.white54, fontSize: 12),
                                               ),
+                                              if (_localFileNames.contains(filename)) ...[
+                                                const SizedBox(height: 4),
+                                                const Row(
+                                                  children: [
+                                                    Icon(Icons.phone_iphone_rounded, size: 12, color: Colors.white30),
+                                                    SizedBox(width: 4),
+                                                    Text(
+                                                      'محفوظ على جهازك',
+                                                      style: TextStyle(color: Colors.white30, fontSize: 11),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
                                             ],
                                           ),
                                         ),

@@ -2,6 +2,10 @@
 #
 # After the first deploy, set the GEMINI_API_KEY value in the dashboard:
 #   Dashboard > evora-backend > Environment > edit the value of GEMINI_API_KEY
+#
+# الخادم العام (بمفاتيح المستخدم) — لا يحتاج أي مفاتيح منك؛ كل مستخدم يستعمل مفتاحه.
+# بعد الإنشاء خذ رابط الخدمة وابنِ الواجهة بـ:
+#   flutter build web --release --dart-define=API_BASE=https://<this-service>.onrender.com
 services:
   - type: web
     name: evora-backend
@@ -15,3 +19,14 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+
+  - type: web
+    name: evora-backend-public
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/
+    autoDeploy: true
+    envVars:
+      - key: PUBLIC_MODE
+        value: "true"

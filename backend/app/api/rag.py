@@ -1,17 +1,22 @@
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any
-from app.rag.document_service import DocumentService
+from app.rag.document_service import get_document_service
 from app.providers.gemini_provider import GeminiProvider
 from app.services.smart_router import SmartRouter
+from app.core.user_context import current_user_id
 import json
 import os
 import asyncio
 from pathlib import Path
 
 router = APIRouter()
-doc_service = DocumentService()
 smart_router = SmartRouter()
+
+
+def get_doc_service():
+    return get_document_service(current_user_id())
+
 
 def get_gemini_provider() -> GeminiProvider:
     return GeminiProvider()
@@ -27,8 +32,11 @@ async def summarize_document(
     (Gemini primary, Groq fallback). Scanned PDFs without extractable text
     are sent to Gemini's native PDF support instead.
     """
-    # Save file locally first
-    temp_path = f"data/uploads/temp_{file.filename}"
+    # Save file locally first (in the user's own temp dir)
+    uid = current_user_id()
+    tmp_dir = Path(f"data/users/{uid}/tmp") if uid else Path("data/tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = str(tmp_dir / f"temp_{file.filename}")
     with open(temp_path, "wb") as f:
         f.write(await file.read())
 
@@ -74,6 +82,7 @@ async def summarize_document(
 @router.post("/upload")
 async def upload_documents(files: List[UploadFile] = File(...)):
     """Upload and start background indexing of documents."""
+    doc_service = get_doc_service()
     results = []
     for file in files:
         content = await file.read()
@@ -84,11 +93,12 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 @router.get("/files")
 async def list_documents():
     """List all uploaded documents and their processing status."""
-    return doc_service.list_files()
+    return get_doc_service().list_files()
 
 @router.get("/files/{filename}/content")
 async def get_document_content(filename: str):
     """Retrieve the extracted text content of a processed document."""
+    doc_service = get_doc_service()
     content = doc_service.get_file_content(filename)
     if content is None:
         status = doc_service.get_status(filename)
@@ -100,6 +110,7 @@ async def get_document_content(filename: str):
 @router.delete("/files/{filename}")
 async def delete_document(filename: str):
     """Delete an uploaded document and its indexed data."""
+    doc_service = get_doc_service()
     success = doc_service.delete_file(filename)
     if not success:
         raise HTTPException(status_code=500, detail=f"Failed to delete '{filename}'")
@@ -108,5 +119,5 @@ async def delete_document(filename: str):
 @router.post("/query")
 async def query_documents(query: str):
     """Query the RAG system."""
-    result = doc_service.query(query)
+    result = get_doc_service().query(query)
     return result

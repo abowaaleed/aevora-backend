@@ -2,7 +2,6 @@ import chromadb
 from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import google.generativeai as genai
 import hashlib
 import json
 import math
@@ -50,9 +49,17 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
     def __init__(self, model_name: str = EMBEDDING_MODEL):
         self.model_name = model_name
+        self._genai = None
+        from app.core.user_context import PUBLIC_MODE
         api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
+        # في الوضع العام لا نستعمل مفتاح الخادم إطلاقاً (حماية الحصة).
+        if api_key and not PUBLIC_MODE:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                self._genai = genai
+            except Exception as e:
+                print(f"[VECTOR STORE] Gemini SDK unavailable: {e}")
         self._mode = self._load_mode()
 
     @staticmethod
@@ -72,9 +79,9 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
     def __call__(self, input: Documents) -> Embeddings:
         inputs = list(input)
-        if self._mode == "gemini":
+        if self._mode == "gemini" and self._genai is not None:
             try:
-                result = genai.embed_content(
+                result = self._genai.embed_content(
                     model=self.model_name,
                     content=inputs,
                     task_type="retrieval_document"
@@ -87,16 +94,27 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
                 self._save_mode("hash")
         return [_hash_embed(t) for t in inputs]
 
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=str(Path(__file__).parent.parent.parent / "data" / "chroma"))
+    return _client
+
+
 class LocalVectorStore:
     """
     Wrapper for ChromaDB local persistent storage.
+    Each user gets their own collection so documents stay isolated.
     """
-    def __init__(self):
-        self.persist_directory = str(Path(__file__).parent.parent.parent / "data" / "chroma")
-        self.client = chromadb.PersistentClient(path=self.persist_directory)
+    def __init__(self, uid: str | None = None):
+        self.client = _get_client()
         self.embedding_function = GeminiEmbeddingFunction()
+        self.collection_name = "documents" if not uid else f"documents_{uid}"
         self.collection = self.client.get_or_create_collection(
-            name="documents",
+            name=self.collection_name,
             embedding_function=self.embedding_function,
             metadata={"hnsw:space": "cosine", "embedding_version": EMBEDDING_VERSION}
         )
@@ -105,11 +123,11 @@ class LocalVectorStore:
         if meta.get("embedding_version") != EMBEDDING_VERSION:
             print(f"[VECTOR STORE] Embedding model changed — recreating collection (old={meta.get('embedding_version')}, new={EMBEDDING_VERSION})")
             try:
-                self.client.delete_collection("documents")
+                self.client.delete_collection(self.collection_name)
             except Exception:
                 pass
             self.collection = self.client.get_or_create_collection(
-                name="documents",
+                name=self.collection_name,
                 embedding_function=self.embedding_function,
                 metadata={"hnsw:space": "cosine", "embedding_version": EMBEDDING_VERSION}
             )

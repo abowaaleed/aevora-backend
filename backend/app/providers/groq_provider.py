@@ -10,6 +10,7 @@ import json
 import requests
 from typing import List, Dict, Any, Iterator
 
+from app.core.user_context import PUBLIC_MODE, current_groq_key
 from app.providers.base_provider import BaseProvider
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -24,23 +25,35 @@ class GroqProvider(BaseProvider):
     """
 
     def __init__(self, model: str = None, timeout: int = 90):
-        self.api_key = os.getenv("GROQ_API_KEY", "").strip()
+        self.server_api_key = os.getenv("GROQ_API_KEY", "").strip()
         self.model = model or os.getenv("GROQ_MODEL", DEFAULT_GROQ_MODEL)
         self.timeout = timeout
         self.api_url = f"{GROQ_BASE_URL}/chat/completions"
-        self.available = bool(self.api_key)
         self.api_url_base = GROQ_BASE_URL
+
+    @property
+    def available(self) -> bool:
+        """متاح عندما يوجد مفتاح خادم أو مفتاح مستخدم ضمن الطلب الحالي."""
+        return bool(self._active_key())
+
+    def _active_key(self) -> str:
+        """مفتاح Groq الفعّال: مفتاح المستخدم فقط في الوضع العام،
+        ومع مفتاح الخادم كاحتياط في الوضع الخاص."""
+        user_key = current_groq_key()
+        if PUBLIC_MODE:
+            return user_key or ""
+        return user_key or self.server_api_key
 
     def _headers(self) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self._active_key()}",
             "Content-Type": "application/json",
         }
 
     def _check_available(self):
         if not self.available:
             raise RuntimeError(
-                "GROQ_API_KEY is not set. Add it to backend/.env to enable the Groq fallback."
+                "لا يوجد مفتاح Groq. أدخل مفتاح Groq في الإعدادات أو اضبطه على الخادم."
             )
 
     def generate(self, prompt: str, **kwargs) -> str:
@@ -132,7 +145,7 @@ class GroqProvider(BaseProvider):
         data = {"model": GROQ_STT_MODEL, "language": "ar"}
         resp = requests.post(
             url,
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers={"Authorization": f"Bearer {self._active_key()}"},
             files=files,
             data=data,
             timeout=120,

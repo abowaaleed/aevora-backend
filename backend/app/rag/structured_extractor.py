@@ -17,21 +17,26 @@ RECORDS_FILE = DATA_DIR / "structured_records.json"
 class StructuredRecordStore:
     """Persistent JSON store for structured records extracted from documents."""
 
-    def __init__(self):
+    def __init__(self, uid: Optional[str] = None):
+        if uid:
+            DATA_DIR = Path(__file__).parent.parent.parent / "data" / "users" / uid
+        else:
+            DATA_DIR = Path(__file__).parent.parent.parent / "data"
+        self._records_file = DATA_DIR / "structured_records.json"
         self._records: Dict[str, List[Dict[str, Any]]] = {}  # filename -> records
         self._load()
 
     def _load(self):
-        if RECORDS_FILE.exists():
+        if self._records_file.exists():
             try:
-                with open(RECORDS_FILE, "r", encoding="utf-8") as f:
+                with open(self._records_file, "r", encoding="utf-8") as f:
                     self._records = json.load(f)
             except Exception:
                 self._records = {}
 
     def _save(self):
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(RECORDS_FILE, "w", encoding="utf-8") as f:
+        self._records_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._records_file, "w", encoding="utf-8") as f:
             json.dump(self._records, f, ensure_ascii=False, indent=2)
 
     def store(self, filename: str, records: List[Dict[str, Any]]):

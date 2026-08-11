@@ -6,7 +6,8 @@ from app.providers.gemini_provider import GeminiProvider
 from app.services.smart_router import SmartRouter
 from app.runtime import Runtime
 from app.prompt_engine import Skill
-from app.api.rag import doc_service
+from app.api.rag import get_doc_service
+from app.core.user_context import current_user_id
 import json
 import asyncio
 
@@ -71,6 +72,7 @@ async def chat_stream(
 
     async def event_generator():
         try:
+            doc_service = get_doc_service()
             knowledge = ""
             direct_answer = None
             try:

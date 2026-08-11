@@ -1,6 +1,7 @@
 from ..task import Stage
 from ..types import PipelineContext, StageStatus
-from app.rag.document_service import DocumentService
+from app.rag.document_service import get_document_service
+from app.core.user_context import current_user_id
 import re
 
 class RAGStage(Stage):
@@ -11,17 +12,19 @@ class RAGStage(Stage):
 
     def __init__(self):
         super().__init__("rag")
-        self.doc_service = DocumentService()
 
     def execute(self, context: PipelineContext):
         query = context.request.user_message
         if not query:
             return self._create_result(status=StageStatus.SKIPPED, output="")
 
+        uid = context.request.user_id or current_user_id()
+        doc_service = get_document_service(uid)
+
         # Always run RAG if documents exist — regardless of mode/skill.
         # Check vector store directly for indexed documents.
         try:
-            check = self.doc_service.vector_store.collection.get(limit=1)
+            check = doc_service.vector_store.collection.get(limit=1)
             has_docs = bool(check and check.get("documents") and len(check["documents"]) > 0)
         except Exception:
             has_docs = False
@@ -29,7 +32,7 @@ class RAGStage(Stage):
             return self._create_result(status=StageStatus.SKIPPED, output="No documents indexed")
 
         print(f"[RAG STAGE] Executing query: {query}")
-        rag_result = self.doc_service.query(query)
+        rag_result = doc_service.query(query)
 
         # Only inject if we found something meaningful
         answer = rag_result.get("answer", "")

@@ -14,6 +14,11 @@ from app.runtime.stages import (
 )
 
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.user_context import (
+    PUBLIC_MODE,
+    derive_user_id,
+    set_request_context,
+)
 
 app = FastAPI(
     title="ايفورا",
@@ -28,6 +33,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_GUARDED_PREFIXES = ("/chat", "/rag", "/voice", "/memory", "/summarize", "/conversations")
+
+
+@app.middleware("http")
+async def user_context_middleware(request, call_next):
+    """Per-request user keys + user id (derived from keys), enforced in PUBLIC_MODE."""
+    path = request.url.path
+    if path in ("/", "/health", "/docs", "/openapi.json") or path.startswith("/uploads"):
+        return await call_next(request)
+
+    gemini_key = request.headers.get("x-gemini-key") or request.headers.get("x-user-gemini-key") or None
+    groq_key = request.headers.get("x-groq-key") or request.headers.get("x-user-groq-key") or None
+    email = request.headers.get("x-user-email") or None
+    user_id = request.headers.get("x-user-id") or None
+
+    if not user_id:
+        user_id = derive_user_id(gemini_key, groq_key) if (gemini_key or groq_key) else None
+
+    if PUBLIC_MODE and path.startswith(_GUARDED_PREFIXES) and not (gemini_key or groq_key):
+        from starlette.responses import JSONResponse
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": "يجب إدخال مفتاح API (Gemini أو Groq) في الإعدادات قبل استخدام المساعد."
+            },
+        )
+
+    set_request_context(
+        user_id=user_id,
+        gemini_key=gemini_key,
+        groq_key=groq_key,
+        email=email,
+    )
+    # ملاحظة: لا نعيد تعيين السياق بعد الرد لأن StreamingResponse يُستهلك لاحقاً
+    # خارج نطاق الوسيط. كل طلب جديد يضبط قيماً جديدة في البداية، لذا لا تسريب.
+    return await call_next(request)
 
 
 # Dependency Injection
