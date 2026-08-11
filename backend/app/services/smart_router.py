@@ -11,6 +11,7 @@ Activates as soon as GROQ_API_KEY is set in the environment.
 import asyncio
 from typing import AsyncGenerator, Optional
 
+from app.core.user_context import PUBLIC_MODE
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.groq_provider import GroqProvider
 
@@ -55,6 +56,26 @@ class SmartRouter:
             {"role": "user", "content": content},
         ]
 
+    async def _stream_groq(
+        self,
+        prompt: str,
+        knowledge: Optional[str],
+        system_instruction: Optional[str],
+    ) -> AsyncGenerator[str, None]:
+        """بثّ حقيقي عبر Groq (كل جزء يُسلَّم فور وصوله)."""
+        messages = self._groq_messages(prompt, knowledge, system_instruction)
+        it = self.groq.stream(messages)
+        while True:
+            try:
+                chunk = await asyncio.to_thread(next, it)
+            except StopIteration:
+                break
+            except Exception as e:
+                print(f"[SMART ROUTER] Groq stream error: {e}")
+                raise
+            if chunk:
+                yield chunk
+
     async def stream(
         self,
         prompt: str,
@@ -62,9 +83,19 @@ class SmartRouter:
         system_instruction: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
-        Stream a reply. Tries Gemini first; if Gemini fails before yielding any
-        output (e.g. 429 quota exceeded), falls back to streaming via Groq.
+        Stream a reply.
+        - Public mode: Groq أولاً عندما يوفر المستخدم مفتاح Groq (أسرع بكثير
+          من Gemini المجاني)، مع الرجوع إلى Gemini عند الفشل.
+        - Private mode: Gemini هو الأساس (كما في التطبيق الأصلي) وGroq احتياط.
         """
+        if PUBLIC_MODE and self.groq.available:
+            try:
+                async for c in self._stream_groq(prompt, knowledge, system_instruction):
+                    yield c
+                return
+            except Exception as e:
+                print(f"[SMART ROUTER] Groq primary failed ({e}); trying Gemini")
+
         produced_any = False
         try:
             gem = self.gemini.service.stream_evora_response(
@@ -81,17 +112,7 @@ class SmartRouter:
             print(f"[SMART ROUTER] Gemini failed before output ({e}); trying Groq")
             if not self.groq.available:
                 raise
-            messages = self._groq_messages(prompt, knowledge, system_instruction)
-
-            def _run_groq():
-                return list(self.groq.stream(messages))
-
-            try:
-                chunks = await asyncio.to_thread(_run_groq)
-            except Exception as ge:
-                print(f"[SMART ROUTER] Groq fallback also failed: {ge}")
-                raise
-            for c in chunks:
+            async for c in self._stream_groq(prompt, knowledge, system_instruction):
                 yield c
 
     def summarize_text(self, text: str, language: str = "ar") -> str:

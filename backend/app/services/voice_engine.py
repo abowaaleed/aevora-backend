@@ -38,22 +38,25 @@ class VoiceEngine:
         # Prefer Gemini on Render (cloud, fast); use Groq Whisper as the fallback
         # when Gemini is unavailable/quota-exhausted; local faster-whisper last.
         engine = os.getenv("STT_ENGINE", "gemini" if os.getenv("RENDER") else "whisper")
-        # لا تستعمل Gemini للصوت في النسخة العامة إلا إذا قدّم المستخدم مفتاح Gemini.
-        from app.core.user_context import current_gemini_key
-        if engine == "gemini" and not (current_gemini_key() or os.getenv("GEMINI_API_KEY")):
-            engine = "whisper"
-        if engine == "gemini":
+        # Groq Whisper (whisper-large-v3-turbo) هو الأسرع — جرّبه أولاً متى توفر
+        # مفتاح Groq (مفتاح مستخدم أو مفتاح خادم)، ثم Gemini، وأخيراً whisper المحلي.
+        from app.core.user_context import current_groq_key, current_gemini_key
+        if current_groq_key() or os.getenv("GROQ_API_KEY"):
+            text = self._transcribe_groq(audio_bytes)
+            if text:
+                print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Groq Whisper)")
+                return text
+            print("[VOICE ENGINE] Groq Whisper empty/failed, trying Gemini")
+
+        # Gemini للصوت يُستعمل فقط عند ضبط STT_ENGINE=gemini وتوفر مفتاح
+        # (في الوضع العام لا يُستعمل بدون مفتاح المستخدم).
+        gemini_key_available = bool(current_gemini_key() or os.getenv("GEMINI_API_KEY"))
+        if engine == "gemini" and gemini_key_available:
             text = self._transcribe_gemini(audio_bytes)
             if text:
                 print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Gemini)")
                 return text
-            print("[VOICE ENGINE] Gemini transcription empty/failed, trying Groq Whisper fallback")
-
-        text = self._transcribe_groq(audio_bytes)
-        if text:
-            print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Groq Whisper)")
-            return text
-        print("[VOICE ENGINE] Groq Whisper unavailable/failed, falling back to faster-whisper")
+            print("[VOICE ENGINE] Gemini transcription empty/failed, trying faster-whisper")
 
         # Write input bytes to a temporary file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
