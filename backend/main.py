@@ -41,6 +41,10 @@ _GUARDED_PREFIXES = ("/chat", "/rag", "/voice", "/memory", "/summarize", "/conve
 async def user_context_middleware(request, call_next):
     """Per-request user keys + user id (derived from keys), enforced in PUBLIC_MODE."""
     path = request.url.path
+    # فحص CORS المسبق (OPTIONS) لا يحمل مفاتيح — يجب تركه يعبر لوسيط CORS وإلا
+    # ترفض المتصفحات كل الطلبات المحمية (رفع/دردشة/صوت).
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if path in ("/", "/health", "/docs", "/openapi.json") or path.startswith("/uploads"):
         return await call_next(request)
 
