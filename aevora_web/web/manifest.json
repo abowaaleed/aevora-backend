@@ -1,11 +1,11 @@
 {
-    "name": "aevora_web",
-    "short_name": "aevora_web",
+    "name": "إيفورا | Evora",
+    "short_name": "ايفورا",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "ايفورا ويب — نسخة عامة تعمل بمفاتيح المستخدم الخاصة",
+    "background_color": "#070B14",
+    "theme_color": "#4CAF50",
+    "description": "ايفورا | Evora — مساعد ذكي يعمل بمفاتيحك الخاصة",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
