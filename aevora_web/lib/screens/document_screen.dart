@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -25,18 +26,42 @@ class _DocumentScreenState extends State<DocumentScreen> {
   List<_DocItem> _files = [];
   bool _loading = true;
   String? _error;
+  bool _uploading = false;
+  String _uploadStatus = '';
 
   @override
   void initState() {
     super.initState();
     _load();
+    _startAutoRefresh();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Timer? _refreshTimer;
+
+  /// تحديث تلقائي كل 4 ثوانٍ ما دامت هناك ملفات قيد المعالجة/الاستعادة.
+  void _startAutoRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && !_uploading) {
+        final hasPending = _files.any((f) => f.status != 'indexed');
+        if (hasPending) _load(silent: true);
+      }
     });
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final res = await apiGet('/rag/files', widget.keys);
       if (res.statusCode != 200) {
@@ -53,6 +78,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
         _loading = false;
       });
     } catch (e) {
+      if (silent) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -69,30 +95,56 @@ class _DocumentScreenState extends State<DocumentScreen> {
       );
       if (result == null || result.files.isEmpty) return;
 
-      setState(() => _loading = true);
-      final files = result.files
-          .where((f) => f.bytes != null)
-          .map((f) => MapEntry('files', Uint8ListBytes(f.bytes!, f.name)))
-          .toList();
+      final files = result.files.where((f) => f.bytes != null).toList();
       if (files.isEmpty) {
         throw Exception('لم يُقرأ أي ملف.');
       }
-      final res = await apiUpload('/rag/upload', widget.keys, files);
-      final body = await res.stream.bytesToString();
-      if (res.statusCode != 200) {
-        throw Exception('الرفع فشل (${res.statusCode}): $body');
+
+      setState(() {
+        _uploading = true;
+        _error = null;
+        _uploadStatus = '';
+      });
+
+      var uploaded = 0;
+      final total = files.length;
+      for (final f in files) {
+        if (!mounted) return;
+        setState(() {
+          _uploadStatus = 'جاري رفع (${uploaded + 1}/$total): ${f.name}';
+        });
+        try {
+          final res = await apiUpload('/rag/upload', widget.keys, [
+            MapEntry('files', Uint8ListBytes(f.bytes!, f.name)),
+          ]);
+          final body = await res.stream.bytesToString();
+          if (res.statusCode != 200) {
+            setState(() => _error = 'فشل رفع «${f.name}» (${res.statusCode}): $body');
+          }
+        } catch (e) {
+          setState(() => _error = 'فشل رفع «${f.name}»: $e');
+          await Future.delayed(const Duration(seconds: 1));
+        }
+        uploaded++;
       }
-      setState(() => _loading = false);
+
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _uploadStatus = uploaded == total ? 'تم رفع جميع الملفات' : 'اكتمل الرفع';
+        });
+      }
       await _load();
-      // إعادة الفهرسة قد تستغرق وقتاً — رفّع القائمة بعد قليل
-      Future.delayed(const Duration(seconds: 6), () {
-        if (mounted) _load();
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) _load(silent: true);
       });
     } catch (e) {
-      setState(() {
-        _loading = false;
-        _error = 'فشل الرفع: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _error = 'فشل الرفع: $e';
+        });
+      }
     }
   }
 
@@ -168,11 +220,35 @@ class _DocumentScreenState extends State<DocumentScreen> {
               children: [
                 Padding(
                   padding: const EdgeInsets.all(16),
-                  child: FilledButton.icon(
-                    onPressed: _pickAndUpload,
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
-                    icon: const Icon(Icons.upload_file),
-                    label: const Text('رفع مستندات (PDF / Word / Excel / صور)'),
+                  child: Column(
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _uploading ? null : _pickAndUpload,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF4CAF50),
+                        ),
+                        icon: _uploading
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.upload_file),
+                        label: Text(
+                          _uploading ? 'رفع جارٍ...' : 'رفع مستندات (PDF / Word / Excel / صور)',
+                        ),
+                      ),
+                      if (_uploadStatus.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Text(
+                            _uploadStatus,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Color(0xFF81C784), fontSize: 13),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 if (_error != null)

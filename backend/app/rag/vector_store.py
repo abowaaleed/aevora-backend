@@ -133,8 +133,12 @@ class LocalVectorStore:
             )
 
     def add_documents(self, ids: List[str], documents: List[str], metadatas: List[Dict[str, Any]]):
-        """Add chunks to the vector store."""
-        self.collection.add(
+        """Add chunks to the vector store.
+
+        Uses upsert so re-uploading a file with the same name replaces its old
+        chunks instead of failing with a duplicate-ID error.
+        """
+        self.collection.upsert(
             ids=ids,
             documents=documents,
             metadatas=metadatas

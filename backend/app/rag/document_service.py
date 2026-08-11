@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from .vector_store import LocalVectorStore
 from .structured_store import StructuredStore
 from .structured_extractor import extract_records, compute_answer, StructuredRecordStore, detect_range_query
+from .cloud_store import get_cloud_store
 from app.services.gemini_service import GeminiService
 import threading
 import asyncio
@@ -199,6 +200,7 @@ class DocumentService:
         self._processing_progress = {} # filename -> percentage/details
         self._rebuild_status_from_stores()
         self._rebuild_structured_records()
+        self._restore_from_cloud()
 
     def get_status(self, filename: str) -> str:
         return self._processing_status.get(filename, "unknown")
@@ -246,6 +248,76 @@ class DocumentService:
         except Exception as e:
             print(f"[DOCUMENT SERVICE] Could not rebuild structured records: {e}")
 
+    def _restore_from_cloud(self):
+        """استعادة ملفات المستخدم من R2 بعد مسح القرص المؤقت.
+
+        تُنزَّل الملفات الغائبة محلياً، ثم يُعاد فهرستها في الخلفية إذا لم تكن
+        موجودة في مخزن المتجهات. بدون إعداد R2 لا يحدث شيء (سلوك سابق).
+        """
+        if not self.uid:
+            return
+        cloud = get_cloud_store()
+        if not cloud.enabled:
+            return
+        try:
+            cloud_files = set(cloud.list(self.uid))
+        except Exception as e:
+            print(f"[DOCUMENT SERVICE] cloud list error: {e}")
+            return
+        if not cloud_files:
+            return
+
+        indexed = set()
+        try:
+            results = self.vector_store.collection.get(include=["metadatas"])
+            for meta in (results.get("metadatas") or []):
+                if isinstance(meta, dict) and meta.get("filename"):
+                    indexed.add(meta["filename"])
+        except Exception as e:
+            print(f"[DOCUMENT SERVICE] cloud restore: cannot read index ({e})")
+
+        restored_count = 0
+        for fname in sorted(cloud_files):
+            local_path = self.upload_dir / fname
+            if not local_path.exists():
+                data = cloud.download(self.uid, fname)
+                if data is None:
+                    continue
+                try:
+                    local_path.write_bytes(data)
+                except Exception as e:
+                    print(f"[DOCUMENT SERVICE] cloud restore write failed {fname}: {e}")
+                    continue
+            if fname not in indexed:
+                self._processing_status[fname] = "pending"
+                self._processing_progress[fname] = "استعادة من السحابة..."
+                thread = threading.Thread(target=self._process_file, args=(fname,))
+                thread.start()
+                restored_count += 1
+        if restored_count:
+            print(f"[DOCUMENT SERVICE] Restored {restored_count} file(s) from cloud for uid={self.uid}")
+        elif cloud_files:
+            print(f"[DOCUMENT SERVICE] Cloud files already indexed ({len(cloud_files)}): no reindex needed")
+
+    def _upload_to_cloud(self, filename: str, content: bytes):
+        """رفع نسخة احتياطية من الملف إلى R2 (لا يمنع الفهرسة عند الفشل)."""
+        if not self.uid:
+            return
+        try:
+            get_cloud_store().upload(self.uid, filename, content)
+        except Exception as e:
+            print(f"[DOCUMENT SERVICE] cloud upload error for {filename}: {e}")
+
+    def _upload_and_process(self, filename: str):
+        """رفع الملف للنسخ الاحتياطي ثم معالجته وفهرسته."""
+        try:
+            file_path = self.upload_dir / filename
+            if file_path.exists():
+                self._upload_to_cloud(filename, file_path.read_bytes())
+        except Exception as e:
+            print(f"[DOCUMENT SERVICE] cloud backup error for {filename}: {e}")
+        self._process_file(filename)
+
     def list_files(self) -> List[Dict[str, Any]]:
         files = []
         # Rebuild from vector store to catch any files not in memory
@@ -272,17 +344,31 @@ class DocumentService:
                         seen.add(fname)
         except Exception:
             pass
+        # Files موجودة في السحابة (R2) ولم تظهر محلياً بعد (استعادة قيد الفهرسة)
+        if self.uid:
+            try:
+                cloud_files = set(get_cloud_store().list(self.uid))
+            except Exception:
+                cloud_files = set()
+            for fname in sorted(cloud_files):
+                if fname not in seen:
+                    files.append({
+                        "filename": fname,
+                        "status": "processing",
+                        "progress": "استعادة من السحابة..."
+                    })
+                    seen.add(fname)
         return files
 
     def start_indexing(self, filename: str, content: bytes):
-        """Start background indexing task."""
+        """Start background indexing task (and keep a durable copy in R2)."""
         file_path = self.upload_dir / filename
         with open(file_path, "wb") as f:
             f.write(content)
 
         self._processing_status[filename] = "pending"
-        # Run indexing in a separate thread
-        thread = threading.Thread(target=self._process_file, args=(filename,))
+        # Run indexing in a separate thread (uploads a backup copy first)
+        thread = threading.Thread(target=self._upload_and_process, args=(filename,))
         thread.start()
 
     def _process_file(self, filename: str):
@@ -518,6 +604,12 @@ class DocumentService:
             # Remove from status tracking
             self._processing_status.pop(filename, None)
             self._processing_progress.pop(filename, None)
+            # Remove from cloud (R2) — best effort
+            if self.uid:
+                try:
+                    get_cloud_store().delete(self.uid, filename)
+                except Exception as e:
+                    print(f"[DOCUMENT SERVICE] cloud delete error for {filename}: {e}")
             return True
         except Exception as e:
             print(f"[DOCUMENT SERVICE] Error deleting {filename}: {e}")
