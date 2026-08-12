@@ -1,11 +1,17 @@
 """
-Cloudflare R2 object storage — التخزين الدائم للملفات.
+التخزين السحابي الدائم — S3-compatible (يدعم Supabase Storage وCloudflare R2
+وأي مزوّد متوافق مع S3 عبر boto3).
 
 قرص Render المجاني مؤقت (يُمحى عند إعادة النشر/التشغيل)، لذلك تُرفع ملفات
-المستخدمين إلى R2 (مجاني 10GB، بدون رسوم نقل) وتُستعاد تلقائياً عند كل بدء.
+المستخدمين إلى السحابة وتُستعاد تلقائياً عند كل بدء.
 
-مفعّل فقط عند ضبط المتغيرات الأربعة:
-  R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
+مفعّل فقط عند ضبط المتغيرات (Supabase مثالاً):
+  STORAGE_ENDPOINT          → https://<project_ref>.supabase.co/storage/v1/s3
+  STORAGE_ACCESS_KEY_ID     → Access Key ID (من إعدادات التخزين)
+  STORAGE_SECRET_ACCESS_KEY → Secret Access Key
+  STORAGE_BUCKET            → اسم الـ bucket
+  STORAGE_REGION            → اختياري، افتراضياً "us-east-1"
+
 بدونها يعمل الخادم بالسلوك السابق (قرص محلي) دون أي خطأ.
 """
 
@@ -15,24 +21,27 @@ from typing import List, Optional
 
 class CloudStore:
     def __init__(self):
-        self.account_id = os.getenv("R2_ACCOUNT_ID", "").strip()
-        self.access_key = os.getenv("R2_ACCESS_KEY_ID", "").strip()
-        self.secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-        self.bucket = os.getenv("R2_BUCKET", "").strip()
+        self.endpoint = os.getenv("STORAGE_ENDPOINT", "").strip()
+        self.access_key = os.getenv("STORAGE_ACCESS_KEY_ID", "").strip()
+        self.secret_key = os.getenv("STORAGE_SECRET_ACCESS_KEY", "").strip()
+        self.bucket = os.getenv("STORAGE_BUCKET", "").strip()
+        self.region = os.getenv("STORAGE_REGION", "us-east-1").strip()
         self.enabled = bool(
-            self.account_id and self.access_key and self.secret_key and self.bucket
+            self.endpoint and self.access_key and self.secret_key and self.bucket
         )
 
     def _client(self):
         import boto3
+        from botocore.config import Config
 
         session = boto3.session.Session()
         return session.client(
             "s3",
-            endpoint_url=f"https://{self.account_id}.r2.cloudflarestorage.com",
+            endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            region_name="auto",
+            region_name=self.region,
+            config=Config(s3={"addressing_style": "path"}),
         )
 
     @staticmethod
@@ -77,7 +86,7 @@ class CloudStore:
             return False
 
     def list(self, uid: str) -> List[str]:
-        """إرجاع أسماء ملفات المستخدم في R2."""
+        """إرجاع أسماء ملفات المستخدم في السحابة."""
         if not self.enabled or not uid:
             return []
         try:
