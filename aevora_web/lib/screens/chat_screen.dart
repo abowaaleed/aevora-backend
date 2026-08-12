@@ -417,7 +417,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
   bool get _isPlaying => widget.playingId.value == widget.message.id;
 
   Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: widget.message.text));
+    // شارة RLM تُلزم برنامج Word بعرض النص من اليمين إلى اليسار عند اللصق.
+    await Clipboard.setData(ClipboardData(text: '\u200F${widget.message.text}'));
     if (!mounted) return;
     setState(() => _copied = true);
     Future.delayed(const Duration(milliseconds: 1500), () {
@@ -471,6 +472,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
               ),
               child: Text(
                 m.text,
+                textDirection: TextDirection.rtl,
                 textAlign: TextAlign.right,
                 style: const TextStyle(color: Colors.white, height: 1.6, fontSize: 15),
               ),

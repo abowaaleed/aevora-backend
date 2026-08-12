@@ -16,10 +16,12 @@ def get_voice_engine() -> VoiceEngine:
 @router.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
+    language: Optional[str] = None,
     voice_engine: VoiceEngine = Depends(get_voice_engine)
 ):
     """
     Transcribe uploaded audio file into text.
+    `language` اختياري (ar/en/...)؛ عند تركه يُكتشف تلقائياً من الصوت.
     """
     import time
     start_time = time.time()
@@ -27,7 +29,7 @@ async def transcribe(
     read_time = time.time() - start_time
     print(f"[VOICE API] Received audio upload: filename={file.filename}, content_type={file.content_type}, size={len(audio_bytes)} bytes (Read in {read_time:.3f}s)")
 
-    text = voice_engine.transcribe(audio_bytes)
+    text = voice_engine.transcribe(audio_bytes, language=language)
     total_time = time.time() - start_time
     print(f"[VOICE API] Transcribed text: '{text}' (Total time: {total_time:.3f}s)")
     return {"text": text}

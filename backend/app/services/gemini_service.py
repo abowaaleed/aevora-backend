@@ -191,14 +191,20 @@ class GeminiService:
         response = chat.send_message(contents)
         return response.text
 
-    def transcribe_audio(self, audio_bytes: bytes, mime: str) -> str:
+    def transcribe_audio(self, audio_bytes: bytes, mime: str, language: Optional[str] = None) -> str:
         """
         Speech-to-Text عبر Gemini. يستعمل مفتاح المستخدم عند وجوده،
-        وإلا مفتاح الخادم عبر الـ SDK.
+        وإلا مفتاح الخادم عبر الـ SDK. عند تمرير `language` (ar/en/...) يُوجَّه
+        النموذج إلى تلك اللغة، وإلا يكتشف اللغة تلقائياً من الصوت.
         """
+        lang_hint = f"Transcribe in language '{language}'." if language else (
+            "First detect the spoken language from the audio "
+            "(Arabic, English, or mixed), then transcribe in that language."
+        )
         prompt = (
             "Transcribe this audio exactly as spoken. "
-            "Output ONLY the transcribed text, with no extra words or punctuation changes."
+            + lang_hint
+            + " Output ONLY the transcribed text, with no extra words or punctuation changes."
         )
         user_key = _user_key()
         if user_key:

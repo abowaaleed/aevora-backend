@@ -24,10 +24,11 @@ class VoiceEngine:
             cls._model = WhisperModel("base", device="cpu", compute_type="int8")
         return cls._model
 
-    def transcribe(self, audio_bytes: bytes) -> str:
+    def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """
         Transcribe audio bytes into text (Speech-to-Text).
         Uses Gemini when available/fast (cloud), falls back to local faster-whisper.
+        `language` (ar/en/...) اختياري — عند تركه يُكتشف تلقائياً من الصوت.
         """
         import time
         start_t = time.time()
@@ -42,7 +43,7 @@ class VoiceEngine:
         # مفتاح Groq (مفتاح مستخدم أو مفتاح خادم)، ثم Gemini، وأخيراً whisper المحلي.
         from app.core.user_context import current_groq_key, current_gemini_key
         if current_groq_key() or os.getenv("GROQ_API_KEY"):
-            text = self._transcribe_groq(audio_bytes)
+            text = self._transcribe_groq(audio_bytes, language=language)
             if text:
                 print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Groq Whisper)")
                 return text
@@ -52,7 +53,7 @@ class VoiceEngine:
         # (في الوضع العام لا يُستعمل بدون مفتاح المستخدم).
         gemini_key_available = bool(current_gemini_key() or os.getenv("GEMINI_API_KEY"))
         if engine == "gemini" and gemini_key_available:
-            text = self._transcribe_gemini(audio_bytes)
+            text = self._transcribe_gemini(audio_bytes, language=language)
             if text:
                 print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s (Gemini)")
                 return text
@@ -100,7 +101,7 @@ class VoiceEngine:
                 os.remove(temp_path)
             print(f"[VOICE ENGINE] Total transcribe method time: {time.time() - start_t:.3f}s")
 
-    def _transcribe_gemini(self, audio_bytes: bytes) -> str:
+    def _transcribe_gemini(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Transcribe audio using the Gemini API (fast, cloud-based)."""
         import time
         start_t = time.time()
@@ -110,7 +111,7 @@ class VoiceEngine:
         service = GeminiService()
         mime = "audio/wav" if audio_bytes.startswith(b"RIFF") else "audio/mpeg"
         try:
-            text = service.transcribe_audio(audio_bytes, mime)
+            text = service.transcribe_audio(audio_bytes, mime, language=language)
             record_provider_usage("stt_gemini", current_user_id())
             print(f"[VOICE ENGINE] Gemini transcription complete in {time.time() - start_t:.3f}s: '{text[:120]}'")
             return text
@@ -118,7 +119,7 @@ class VoiceEngine:
             print(f"[VOICE ENGINE] Gemini transcription failed: {e}")
             return ""
 
-    def _transcribe_groq(self, audio_bytes: bytes) -> str:
+    def _transcribe_groq(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Transcribe audio using Groq's hosted Whisper (cloud fallback)."""
         try:
             from app.providers.groq_provider import GroqProvider
@@ -141,7 +142,7 @@ class VoiceEngine:
                 payload = wav_buf.getvalue()
             except Exception as ne:
                 print(f"[VOICE ENGINE] pydub normalization skipped for Groq: {ne}")
-            text = provider.transcribe_audio(payload, filename=filename)
+            text = provider.transcribe_audio(payload, filename=filename, language=language)
             record_provider_usage("stt_groq", current_user_id())
             return text
         except Exception as e:
@@ -184,9 +185,142 @@ class VoiceEngine:
         female_names = ['aria', 'sonia', 'zariyah', 'natasha', 'jenny', 'libby', 'samantha', 'victoria']
         return any(name in voice_id.lower() for name in female_names)
 
+    @staticmethod
+    def _wrap_linear16_wav(pcm: bytes, rate: int) -> bytes:
+        """يلف عينات PCM (L16) في غلاف WAV ليعمل عبر المتصفح."""
+        import wave
+        import io
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(pcm)
+        return buf.getvalue()
+
+    def _synthesize_gemini(self, text: str, voice: Optional[str] = None) -> Optional[bytes]:
+        """TTS من Gemini (gemini-2.5-flash-preview-tts): صوت بشري طبيعي
+        يتقن العربية والإنجليزية ويعالج خلط اللغتين في نص واحد.
+        يستعمل مفتاح المستخدم في الوضع العام (أو مفتاح الخادم إن وُجد)."""
+        import httpx
+        import base64
+        from app.core.user_context import current_gemini_key
+        key = current_gemini_key() or os.getenv("GEMINI_API_KEY")
+        if not key:
+            return None
+        try:
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash-preview-tts:generateContent?key={key}"
+            )
+            # صوت بشري متعدد اللغات (يدعم العربية والإنجليزية معاً).
+            voice_name = "sulafat"
+            payload = {
+                "contents": [{"parts": [{"text": text}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {"voiceName": voice_name}
+                        }
+                    },
+                },
+            }
+            resp = httpx.post(url, json=payload, timeout=120.0)
+            if resp.status_code != 200:
+                print(f"[VOICE ENGINE] Gemini TTS error {resp.status_code}: {resp.text[:200]}")
+                return None
+            obj = resp.json()
+            parts = (obj.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+            audio = None
+            mime = ""
+            for p in parts:
+                inline = p.get("inlineData") or {}
+                if inline.get("data"):
+                    audio = base64.b64decode(inline["data"])
+                    mime = inline.get("mimeType") or ""
+                    break
+            if not audio:
+                print("[VOICE ENGINE] Gemini TTS returned no audio")
+                return None
+            print(f"[VOICE ENGINE] Gemini TTS bytes: {len(audio)} ({mime})")
+            if "L16" in mime or "l16" in mime:
+                rate = 24000
+                m = re.search(r"rate=(\d+)", mime)
+                if m:
+                    rate = int(m.group(1))
+                return self._wrap_linear16_wav(audio, rate)
+            return audio
+        except Exception as e:
+            print(f"[VOICE ENGINE] Gemini TTS failed: {e}")
+            return None
+
+    def _edge_synthesize_once(self, text: str, voice: str, rate: str, pitch: str) -> bytes:
+        """توليد مقطع واحد عبر edge-tts في خيط/حلقة مستقلة."""
+        import edge_tts
+        import concurrent.futures
+
+        async def _inner():
+            communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_mp3:
+                temp_path = temp_mp3.name
+            try:
+                await communicate.save(temp_path)
+                with open(temp_path, "rb") as f:
+                    return f.read()
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+        def _run_async():
+            new_loop = asyncio.new_event_loop()
+            try:
+                return new_loop.run_until_complete(_inner())
+            finally:
+                new_loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run_async).result(timeout=60)
+
+    def _split_language_runs(self, text: str, ar_voice: str, en_voice: str):
+        """تقسيم النص إلى مقاطع متصلة حسب اللغة حتى يُقرأ كل جزء بصوته الصحيح.
+        (صوت عربي للعربية، وصوت إنجليزي للإنجليزية) — لحل خلط اللغتين في رد واحد."""
+        tokens = re.findall(
+            r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+'
+            r'|[A-Za-z0-9]+'
+            r'|[^A-Za-z\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+',
+            text,
+        )
+        runs = []
+        for tok in tokens:
+            if re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', tok):
+                kind = True
+            elif re.search(r'[A-Za-z0-9]', tok):
+                kind = False
+            else:
+                if runs:
+                    runs[-1] = (runs[-1][0], runs[-1][1] + tok)
+                else:
+                    runs.append((False, tok))
+                continue
+            if runs and runs[-1][0] == kind:
+                runs[-1] = (kind, runs[-1][1] + tok)
+            else:
+                runs.append((kind, tok))
+        segments = []
+        for is_ar, seg in runs:
+            seg = seg.strip()
+            if not seg:
+                continue
+            segments.append((ar_voice if is_ar else en_voice, seg))
+        return segments
+
     def synthesize(self, text: str, voice: Optional[str] = None, rate: Optional[str] = None, pitch: Optional[str] = None) -> bytes:
         """
         Synthesize text into expressive human-like speech.
+        يفضّل Gemini TTS (صوت بشري، يجيد العربية والإنجليزية وخلطهما)
+        عند توفر مفتاح وسرعة افتراضية، وإلا edge-tts (يدعم الإبطاء/الحدة)
+        مع تقسيم النص لكل لغة بصوتها.
         """
         if not text:
             return b""
@@ -198,37 +332,61 @@ class VoiceEngine:
         # 2. Phrasing/Pauses
         clean_text = self._apply_natural_pauses(clean_text)
 
-        # 3. Detect language
+        # 3. TTS engine: Gemini أولاً (صوت بشري) — إلا مع طلب إبطاء/حدة
+        #    أو تعطيل TTS_ENGINE=edge صراحةً.
+        engine_setting = os.getenv("TTS_ENGINE", "auto")
+        default_speed = not rate or "+0%" in rate
+        neutral_pitch = not pitch or pitch in ("+0%", "+0Hz")
+        use_gemini = (
+            engine_setting != "edge"
+            and default_speed
+            and neutral_pitch
+        )
+        if use_gemini:
+            gemini_audio = self._synthesize_gemini(clean_text, voice=voice)
+            if gemini_audio:
+                print(f"[VOICE ENGINE] Gemini TTS synthesized. Bytes: {len(gemini_audio)}")
+                return gemini_audio
+            print("[VOICE ENGINE] Gemini TTS unavailable — falling back to edge-tts")
+
+        # 4. Detect language
         arabic_chars = len(re.findall(r'[\u0600-\u06FF]', clean_text))
         english_chars = len(re.findall(r'[a-zA-Z]', clean_text))
         has_arabic = arabic_chars > 0
         is_primarily_arabic = arabic_chars >= english_chars
 
-        # 4. Determine Target Voice
+        # 5. Determine Target Voice
         print(f"[VOICE ENGINE] TTS REQUEST - Voice: '{voice}', Rate: '{rate}', Pitch: '{pitch}'")
         print(f"[VOICE ENGINE] TEXT ANALYSIS - Arabic chars: {arabic_chars}, English chars: {english_chars}, Has Arabic: {has_arabic}")
 
         is_female_requested = self._is_female(voice)
 
+        # صوت عربي وصوت إنجليزي (للتقسيم حسب اللغة في النصوص المختلطة)
+        if voice and voice.startswith("ar-"):
+            ar_voice = voice
+        else:
+            ar_voice = "ar-SA-ZariyahNeural" if is_female_requested else "ar-SA-HamedNeural"
+        if voice and voice.startswith("en-"):
+            en_voice = voice
+        else:
+            en_voice = "en-US-AriaNeural" if is_female_requested else "en-US-AndrewNeural"
+
+        # الصوت الأساسي (للسجل وللاحتياط النهائي) حسب اللغة الغالبة
         if voice:
             target_voice = voice
-            # Safety Dynamic Override: If user selected EN voice but text is AR, or vice versa
-            # We ONLY override if the language script is absolutely unsupported.
             if has_arabic and not voice.startswith("ar-"):
-                # Use female Arabic voice if user requested female
-                target_voice = "ar-SA-ZariyahNeural" if is_female_requested else "ar-SA-HamedNeural"
+                target_voice = ar_voice
                 print(f"[VOICE ENGINE] LANG MISMATCH: English voice '{voice}' requested for Arabic text. Overriding to '{target_voice}' (Female: {is_female_requested}).")
             elif not has_arabic and voice.startswith("ar-"):
-                # Use female English voice if user requested female
-                target_voice = "en-US-AriaNeural" if is_female_requested else "en-US-AndrewNeural"
+                target_voice = en_voice
                 print(f"[VOICE ENGINE] LANG MISMATCH: Arabic voice '{voice}' requested for English text. Overriding to '{target_voice}' (Female: {is_female_requested}).")
             else:
                 print(f"[VOICE ENGINE] LANG MATCH: Keeping user voice selection '{target_voice}'")
         else:
-            target_voice = "ar-SA-HamedNeural" if is_primarily_arabic else "en-US-AndrewNeural"
+            target_voice = ar_voice if is_primarily_arabic else en_voice
             print(f"[VOICE ENGINE] NO VOICE PROVIDED: Defaulting to '{target_voice}'")
 
-        # 5. Parameters (Edge-TTS format: rate uses %, pitch uses Hz)
+        # 6. Parameters (Edge-TTS format: rate uses %, pitch uses Hz)
         # Clean up any malformed pitch strings (e.g. "+0%Hz")
         clean_pitch = pitch
         if clean_pitch and "%Hz" in clean_pitch:
@@ -253,32 +411,22 @@ class VoiceEngine:
         print(f"[VOICE ENGINE] Final synthesis decision: Voice='{target_voice}', Rate='{target_rate}', Pitch='{target_pitch}'")
 
         try:
-            import edge_tts
-
-            async def _edge_synthesize():
-                communicate = edge_tts.Communicate(clean_text, target_voice, rate=target_rate, pitch=target_pitch)
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_mp3:
-                    temp_path = temp_mp3.name
-
-                try:
-                    await communicate.save(temp_path)
-                    with open(temp_path, "rb") as f:
-                        return f.read()
-                finally:
-                    if os.path.exists(temp_path): os.remove(temp_path)
-
-            # Run async edge-tts in a dedicated thread+loop to avoid uvloop/nest_asyncio conflicts
-            import concurrent.futures
-            def _run_async():
-                new_loop = asyncio.new_event_loop()
-                try:
-                    return new_loop.run_until_complete(_edge_synthesize())
-                finally:
-                    new_loop.close()
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                audio_result = pool.submit(_run_async).result(timeout=60)
-            print(f"[VOICE ENGINE] edge-tts synthesis successful. Bytes: {len(audio_result)}")
+            # توليد صوتي: تقسيم النص المختلط لكل لغة بصوتها ثم دمج مقاطع MP3.
+            segments = self._split_language_runs(clean_text, ar_voice, en_voice)
+            if len(segments) <= 1:
+                audio_result = self._edge_synthesize_once(
+                    clean_text, target_voice, target_rate, target_pitch
+                )
+                print(f"[VOICE ENGINE] edge-tts synthesis successful (single). Bytes: {len(audio_result)}")
+            else:
+                blobs = [
+                    self._edge_synthesize_once(seg_text, seg_voice, target_rate, target_pitch)
+                    for seg_voice, seg_text in segments
+                ]
+                if any(b is None or not b for b in blobs):
+                    raise RuntimeError("segment synthesis returned empty audio")
+                audio_result = b"".join(blobs)
+                print(f"[VOICE ENGINE] edge-tts blend successful ({len(segments)} segments, {len(audio_result)} bytes)")
             return audio_result
 
         except Exception as e:

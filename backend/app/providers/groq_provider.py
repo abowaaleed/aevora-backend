@@ -8,7 +8,7 @@ Gemini's quota/availability is exhausted. Activates once GROQ_API_KEY is set.
 import os
 import json
 import requests
-from typing import List, Dict, Any, Iterator
+from typing import List, Dict, Any, Iterator, Optional
 
 from app.core.user_context import PUBLIC_MODE, current_groq_key
 from app.providers.base_provider import BaseProvider
@@ -134,15 +134,21 @@ class GroqProvider(BaseProvider):
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-    def transcribe_audio(self, audio_bytes: bytes, filename: str = "audio.wav") -> str:
+    def transcribe_audio(
+        self, audio_bytes: bytes, filename: str = "audio.wav", language: Optional[str] = None
+    ) -> str:
         """
         Speech-to-text via Groq's hosted Whisper (fast, no local model needed).
+        Whisper auto-detects the spoken language when `language` is omitted,
+        so Arabic, English, or mixed speech are transcribed correctly.
         Returns the transcribed text, or raises on failure.
         """
         self._check_available()
         url = f"{GROQ_BASE_URL}/audio/transcriptions"
         files = {"file": (filename or "audio.wav", audio_bytes)}
-        data = {"model": GROQ_STT_MODEL, "language": "ar"}
+        data = {"model": GROQ_STT_MODEL}
+        if language:
+            data["language"] = language
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {self._active_key()}"},
