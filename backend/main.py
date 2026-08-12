@@ -34,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_GUARDED_PREFIXES = ("/chat", "/rag", "/voice", "/memory", "/summarize", "/conversations", "/companion")
+_GUARDED_PREFIXES = ("/chat", "/rag", "/voice", "/memory", "/summarize", "/conversations", "/companion", "/usage")
 
 
 @app.middleware("http")
@@ -146,7 +146,7 @@ app.dependency_overrides[api_get_conversation_manager] = get_conversation_manage
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.api import voice, rag, companion
+from app.api import voice, rag, companion, usage
 
 # Ensure upload directory exists
 upload_dir = os.path.join(os.path.dirname(__file__), "data", "uploads")
@@ -160,3 +160,4 @@ app.include_router(chat.router, tags=["Chat"])
 app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 app.include_router(rag.router, prefix="/rag", tags=["RAG"])
 app.include_router(companion.router, prefix="/companion", tags=["Companion"])
+app.include_router(usage.router, prefix="/usage", tags=["Usage"])

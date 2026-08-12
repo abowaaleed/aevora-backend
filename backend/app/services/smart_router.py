@@ -95,10 +95,15 @@ class SmartRouter:
           من Gemini المجاني)، مع الرجوع إلى Gemini عند الفشل.
         - Private mode: Gemini هو الأساس (كما في التطبيق الأصلي) وGroq احتياط.
         """
+        from app.core.user_context import current_user_id
+        from app.usage.service import record_provider_usage
+        uid = current_user_id()
+
         if PUBLIC_MODE and self.groq.available:
             try:
                 async for c in self._stream_groq(prompt, knowledge, system_instruction):
                     yield c
+                record_provider_usage("groq", uid)
                 return
             except Exception as e:
                 print(f"[SMART ROUTER] Groq primary failed ({e}); trying Gemini")
@@ -111,6 +116,7 @@ class SmartRouter:
             async for chunk in gem:
                 produced_any = True
                 yield chunk
+            record_provider_usage("gemini", uid)
             return
         except Exception as e:
             if produced_any:
@@ -121,25 +127,31 @@ class SmartRouter:
                 raise
             async for c in self._stream_groq(prompt, knowledge, system_instruction):
                 yield c
+            record_provider_usage("groq", uid)
 
-    def summarize_text(self, text: str, language: str = "ar") -> str:
+    def summarize_text(self, text: str, language: str = "ar", uid: str | None = None) -> str:
         """
         Summarize extracted text. Gemini first, then Groq fallback.
         Returns a plain-text summary string (not streamed).
         """
+        from app.usage.service import record_provider_usage
         prompt = (
             "قم بتلخيص هذا المحتوى في نقاط رئيسية واضحة ومحددة، "
             "مع الحفاظ على الأرقام والمعلومات المهمة.\n\n"
             f"المحتوى:\n{text}"
         )
         try:
-            return self.gemini.service.generate_content_sync(prompt)
+            result = self.gemini.service.generate_content_sync(prompt)
+            record_provider_usage("gemini", uid)
+            return result
         except Exception as e:
             print(f"[SMART ROUTER] Gemini summarization failed ({e}); trying Groq")
             if not self.groq.available:
                 raise
             try:
-                return self.groq.generate(prompt, num_predict=600)
+                result = self.groq.generate(prompt, num_predict=600)
+                record_provider_usage("groq", uid)
+                return result
             except Exception as ge:
                 print(f"[SMART ROUTER] Groq summarization failed: {ge}")
                 raise

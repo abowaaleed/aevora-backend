@@ -105,10 +105,13 @@ class VoiceEngine:
         import time
         start_t = time.time()
         from app.services.gemini_service import GeminiService
+        from app.usage.service import record_provider_usage
+        from app.core.user_context import current_user_id
         service = GeminiService()
         mime = "audio/wav" if audio_bytes.startswith(b"RIFF") else "audio/mpeg"
         try:
             text = service.transcribe_audio(audio_bytes, mime)
+            record_provider_usage("stt_gemini", current_user_id())
             print(f"[VOICE ENGINE] Gemini transcription complete in {time.time() - start_t:.3f}s: '{text[:120]}'")
             return text
         except Exception as e:
@@ -119,6 +122,8 @@ class VoiceEngine:
         """Transcribe audio using Groq's hosted Whisper (cloud fallback)."""
         try:
             from app.providers.groq_provider import GroqProvider
+            from app.usage.service import record_provider_usage
+            from app.core.user_context import current_user_id
             provider = GroqProvider()
             if not provider.available:
                 print("[VOICE ENGINE] Groq API key not set — skipping Groq Whisper")
@@ -136,7 +141,9 @@ class VoiceEngine:
                 payload = wav_buf.getvalue()
             except Exception as ne:
                 print(f"[VOICE ENGINE] pydub normalization skipped for Groq: {ne}")
-            return provider.transcribe_audio(payload, filename=filename)
+            text = provider.transcribe_audio(payload, filename=filename)
+            record_provider_usage("stt_groq", current_user_id())
+            return text
         except Exception as e:
             print(f"[VOICE ENGINE] Groq Whisper transcription failed: {e}")
             return ""

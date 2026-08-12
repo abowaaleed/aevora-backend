@@ -71,3 +71,10 @@ async def reset_companion():
     service = get_companion_service()
     service.reset()
     return {"reset": True}
+
+
+@router.post("/acknowledge")
+async def acknowledge_proactive():
+    """تسجيل أن المستخدم رأى/تفاعل مع بطاقة المبادرة."""
+    get_companion_service().acknowledge_proactive()
+    return {"acknowledged": True}

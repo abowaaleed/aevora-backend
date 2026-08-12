@@ -165,3 +165,15 @@ Future<void> companionDeleteTask(KeySettings keys, String taskId) async {
 Future<void> companionReset(KeySettings keys) async {
   await apiPost('/companion/reset', keys);
 }
+
+Future<void> companionAcknowledge(KeySettings keys) async {
+  await apiPost('/companion/acknowledge', keys);
+}
+
+Future<Map<String, dynamic>> usageState(KeySettings keys) async {
+  final res = await apiGet('/usage', keys);
+  if (res.statusCode != 200) {
+    throw Exception('فشل جلب الاستهلاك (${res.statusCode}): ${res.body}');
+  }
+  return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+}

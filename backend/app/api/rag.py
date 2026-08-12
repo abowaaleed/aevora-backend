@@ -61,7 +61,8 @@ async def summarize_document(
                 print(f"[RAG API] Local text extraction error: {te}")
 
             if len(text.strip()) >= 20:
-                summary = await asyncio.to_thread(smart_router.summarize_text, text)
+                uid = current_user_id()
+                summary = await asyncio.to_thread(smart_router.summarize_text, text, "ar", uid)
                 yield f"data: {json.dumps({'text': summary})}\n\n"
                 yield "data: [DONE]\n\n"
                 return

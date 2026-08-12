@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../config.dart';
 import 'key_setup_screen.dart';
 
@@ -20,6 +21,32 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _clearing = false;
+  Map<String, dynamic>? _usage;
+  bool _usageLoading = false;
+  String? _usageError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUsage();
+  }
+
+  Future<void> _loadUsage() async {
+    setState(() {
+      _usageLoading = true;
+      _usageError = null;
+    });
+    try {
+      final u = await usageState(widget.keys);
+      if (!mounted) return;
+      setState(() => _usage = u);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _usageError = 'تعذر جلب الاستهلاك: $e');
+    } finally {
+      if (mounted) setState(() => _usageLoading = false);
+    }
+  }
 
   Future<void> _openEdit() async {
     final changed = await Navigator.of(context).push<bool>(
@@ -71,6 +98,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: const Icon(Icons.edit),
             label: const Text('تعديل المفاتيح'),
           ),
+          const SizedBox(height: 24),
+          const Text('استهلاك الخطة المجانية اليوم',
+              style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+          const SizedBox(height: 4),
+          Text(
+            _usage?['date'] == null
+                ? 'حسب مفاتيحك على هذا الجهاز'
+                : 'آخر تحديث: ${_usage?['date']}',
+            style: const TextStyle(color: Colors.white38, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          _usageCard(),
           const SizedBox(height: 12),
           const Divider(color: Colors.white12),
           const SizedBox(height: 8),
@@ -97,6 +136,125 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _usageCard() {
+    if (_usageLoading && _usage == null) {
+      return const Card(
+        color: Color(0xFF141A2A),
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (_usageError != null) {
+      return Card(
+        color: const Color(0xFF141A2A),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_usageError!,
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _loadUsage,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final u = _usage;
+    if (u == null) return const SizedBox.shrink();
+    return Card(
+      color: const Color(0xFF141A2A),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _usageRow('chat', 'Gemini', u['gemini'] as Map<String, dynamic>?),
+            const SizedBox(height: 14),
+            _usageRow('chat', 'Groq', u['groq'] as Map<String, dynamic>?),
+            const SizedBox(height: 14),
+            _usageRow('mic', 'التعرف على الصوت', u['stt_gemini'] as Map<String, dynamic>?,
+                isStt: true),
+            const SizedBox(height: 14),
+            _usageRow('mic', 'التعرف على الصوت (Groq)', u['stt_groq'] as Map<String, dynamic>?,
+                isStt: true),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text('مهام المساعد الشخصي: ',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Text(
+                  '${(u['events'] as Map<String, dynamic>?)?['companion_messages'] ?? 0} رسالة',
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _usageLoading ? null : _loadUsage,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: Text(_usageLoading ? 'جارٍ التحديث...' : 'تحديث'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _usageRow(String iconKind, String label, Map<String, dynamic>? data,
+      {bool isStt = false}) {
+    final used = (data?['used'] as num?)?.toInt() ?? 0;
+    final limit = (data?['limit'] as num?)?.toInt() ?? 0;
+    final remaining = (data?['remaining'] as num?)?.toInt() ?? 0;
+    final ratio = limit > 0 ? used / limit : 0.0;
+    final color = ratio >= 0.9
+        ? Colors.redAccent
+        : ratio >= 0.6
+            ? Colors.orange
+            : const Color(0xFF81C784);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(iconKind == 'mic' ? Icons.mic : Icons.auto_awesome,
+                color: const Color(0xFF81C784), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white, fontSize: 13)),
+            ),
+            Text('$used / $limit',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: ratio.clamp(0.0, 1.0),
+            minHeight: 8,
+            backgroundColor: Colors.white10,
+            valueColor: AlwaysStoppedAnimation(color),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(isStt ? '' : 'المتبقي اليوم: $remaining',
+            style: TextStyle(color: Colors.white38, fontSize: 11)),
+      ],
     );
   }
 

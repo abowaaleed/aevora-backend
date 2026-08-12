@@ -324,14 +324,19 @@ class CompanionService:
 
     def _generate(self, prompt: str, max_tokens: int = 800) -> str:
         """توليد نص كامل: Gemini أولاً ثم Groq احتياطاً (مثل بقية الأجزاء)."""
+        from app.usage.service import record_provider_usage
         last_err = None
         try:
-            return self._router.gemini.service.generate_content_sync(prompt)
+            out = self._router.gemini.service.generate_content_sync(prompt)
+            record_provider_usage("gemini", self.uid)
+            return out
         except Exception as e:
             last_err = e
         if self._router.groq.available:
             try:
-                return self._router.groq.generate(prompt, num_predict=max_tokens)
+                out = self._router.groq.generate(prompt, num_predict=max_tokens)
+                record_provider_usage("groq", self.uid)
+                return out
             except Exception as e:
                 last_err = e
         raise RuntimeError(f"لا يتوفر نموذج للتحليل: {last_err}")
@@ -380,6 +385,13 @@ class CompanionService:
 
     # --------------------------------------------------------------- chat
     async def chat(self, message: str) -> AsyncGenerator[str, None]:
+        try:
+            from app.usage.service import get_usage_service
+            get_usage_service(self.uid).record_event("companion_messages")
+        except Exception as e:
+            print(f"[COMPANION] usage event error: {e}")
+        # قمع المبادرة بعد أي تفاعل بالمحادثة
+        self.profile.last_proactive_shown = _now()
         self.history.append(CompanionMessage(role="user", text=message.strip(), ts=_now()))
         system = self._build_system_prompt()
         full = ""
@@ -397,17 +409,29 @@ class CompanionService:
 
     # ------------------------------------------------------------ proactive
     def proactive(self) -> tuple[Optional[str], Optional[str]]:
-        """رسالة مبادرة: تذكير بالمهام، أو تحية اليوم، أو تفاعل بعد غياب."""
+        """رسالة مبادرة: تذكير بالمهام، أو تحية اليوم، أو تفاعل بعد غياب.
+        لا يُعرض مرة ثانية إذا عُرض خلال آخر 12 ساعة (حتى لا يزعج)."""
+        # قمع التكرار: لا تُظهر المبادرة إذا عُرضت خلال آخر 12 ساعة
+        last_shown = self.profile.last_proactive_shown
+        if last_shown:
+            try:
+                last_dt = datetime.datetime.fromisoformat(last_shown)
+                elapsed = datetime.datetime.now(datetime.timezone.utc) - last_dt
+                if elapsed.total_seconds() < 12 * 3600:
+                    return None, None
+            except Exception:
+                pass
+
         pending = self._pending_tasks()
         last_ts = self.history[-1].ts if self.history else None
 
         if pending:
             first = pending[0]
             due_hint = f" والمستحقة {first.due}" if first.due else ""
-            return (
-                f"عندك مهمة معلقة: «{first.text}»{due_hint}. تريد أن نبدأ بها الآن؟",
-                f"ذكرني بمهامي وابدأ معي بأهمها",
-            )
+            msg = f"عندك مهمة معلقة: «{first.text}»{due_hint}. تريد أن نبدأ بها الآن؟"
+            self.profile.last_proactive_shown = _now()
+            self._save_all()
+            return msg, "ذكرني بمهامي وابدأ معي بأهمها"
 
         now = datetime.datetime.now()
         hour = now.hour
@@ -421,16 +445,20 @@ class CompanionService:
             try:
                 last = datetime.datetime.fromisoformat(last_ts)
                 if last.date() != now.date():
-                    return (
-                        f"{time_text} 👋 اشتقت إليك منذ الأمس. كيف حالك اليوم؟",
-                        "حدثني عن يومك",
-                    )
+                    msg = f"{time_text} 👋 اشتقت إليك منذ الأمس. كيف حالك اليوم؟"
+                    self.profile.last_proactive_shown = _now()
+                    self._save_all()
+                    return msg, "حدثني عن يومك"
             except Exception:
                 pass
-        return (
-            f"{time_text} 👋 جاهز لممارسة الإنجليزية معك اليوم؟",
-            "ابدأ جلسة إنجليزية قصيرة معي",
-        )
+
+        # لا تُظهر تحية وقتية إذا سبق تفاعل اليوم
+        return None, None
+
+    def acknowledge_proactive(self) -> None:
+        """تسجيل أن المستخدم فعّل/رأى بطاقة المبادرة."""
+        self.profile.last_proactive_shown = _now()
+        self._save_all()
 
     # ----------------------------------------------------------------- state
     def get_state(self) -> CompanionState:

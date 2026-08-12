@@ -32,6 +32,9 @@ class CompanionProfile(BaseModel):
     )
     vocabulary: list[str] = Field(default_factory=list)
     learning_stats: dict[str, Any] = Field(default_factory=dict)
+    last_proactive_shown: Optional[str] = Field(
+        default=None, description="آخر مرة عُرضت فيها بطاقة المبادرة"
+    )
     created: str = ""
     updated: str = ""
 
