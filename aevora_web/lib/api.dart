@@ -102,3 +102,66 @@ Future<String> streamChat(
   }
   return full;
 }
+
+/// إرسال رسالة للمساعد الشخصي (SSE) وإرجاع الرد كاملاً.
+Future<String> streamCompanion(
+  String message,
+  KeySettings keys, {
+  void Function(String partial)? onChunk,
+}) async {
+  final req = http.Request('POST', Uri.parse('$apiBaseUrl/companion/chat'));
+  req.headers.addAll({...authHeaders(keys), 'Content-Type': 'application/json'});
+  req.body = jsonEncode({'message': message});
+  final response = await req.send().timeout(const Duration(minutes: 4));
+
+  if (response.statusCode != 200) {
+    final body = await response.stream.bytesToString();
+    throw Exception('الخادم رفض الطلب (${response.statusCode}): $body');
+  }
+
+  var full = '';
+  await for (final line
+      in response.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+    if (!line.startsWith('data: ')) continue;
+    final dataStr = line.substring(6).trim();
+    if (dataStr == '[DONE]') break;
+    try {
+      final data = jsonDecode(dataStr);
+      if (data['error'] != null) throw Exception(data['error']);
+      final text = data['text'] ?? '';
+      if (text.isNotEmpty) {
+        full += text;
+        onChunk?.call(text);
+      }
+    } catch (_) {}
+  }
+  return full;
+}
+
+Future<Map<String, dynamic>> companionState(KeySettings keys) async {
+  final res = await apiGet('/companion/state', keys);
+  if (res.statusCode != 200) {
+    throw Exception('فشل جلب حالة المساعد (${res.statusCode}): ${res.body}');
+  }
+  return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+}
+
+Future<void> companionAddTask(KeySettings keys, String text, {String? due}) async {
+  final res = await apiPost('/companion/tasks', keys,
+      body: {'text': text, 'due': ?due});
+  if (res.statusCode != 200) {
+    throw Exception('فشل إضافة المهمة (${res.statusCode}): ${res.body}');
+  }
+}
+
+Future<void> companionToggleTask(KeySettings keys, String taskId) async {
+  await apiPost('/companion/tasks/$taskId/toggle', keys);
+}
+
+Future<void> companionDeleteTask(KeySettings keys, String taskId) async {
+  await apiDelete('/companion/tasks/$taskId', keys);
+}
+
+Future<void> companionReset(KeySettings keys) async {
+  await apiPost('/companion/reset', keys);
+}

@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import 'chat_screen.dart';
+import 'companion_screen.dart';
 import 'document_screen.dart';
 import 'settings_screen.dart';
 
@@ -40,6 +41,7 @@ class _ShellState extends State<Shell> {
     final screens = [
       ChatScreen(keys: _keys),
       DocumentScreen(keys: _keys),
+      CompanionScreen(keys: _keys),
       SettingsScreen(
         keys: _keys,
         onKeysChanged: (k) => setState(() => _keys = k),
@@ -63,6 +65,11 @@ class _ShellState extends State<Shell> {
             icon: Icon(Icons.folder_shared_outlined),
             selectedIcon: Icon(Icons.folder_shared),
             label: 'المستندات',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.psychology_alt_outlined),
+            selectedIcon: Icon(Icons.psychology_alt_rounded),
+            label: 'المساعد',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

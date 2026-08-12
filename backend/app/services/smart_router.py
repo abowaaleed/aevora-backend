@@ -65,14 +65,21 @@ class SmartRouter:
         """بثّ حقيقي عبر Groq (كل جزء يُسلَّم فور وصوله)."""
         messages = self._groq_messages(prompt, knowledge, system_instruction)
         it = self.groq.stream(messages)
-        while True:
+        _SENTINEL = object()
+
+        def _next_safe():
             try:
-                chunk = await asyncio.to_thread(next, it)
+                return next(it)
             except StopIteration:
-                break
+                return _SENTINEL
             except Exception as e:
                 print(f"[SMART ROUTER] Groq stream error: {e}")
                 raise
+
+        while True:
+            chunk = await asyncio.to_thread(_next_safe)
+            if chunk is _SENTINEL:
+                break
             if chunk:
                 yield chunk
 
