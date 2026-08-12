@@ -182,6 +182,8 @@ class CompanionService:
             lines.append(f"- اهتماماته: {'، '.join(p.interests)}")
         if p.known_facts:
             lines.append(f"- حقائق تعرفها عنه: {'، '.join(p.known_facts[-8:])}")
+        if self.memories:
+            lines.append(f"- ذكرياتك المهمة: {'؛ '.join(self.memories[-15:])}")
         if p.last_corrections:
             lines.append(f"- آخر أخطاء صُححت له: {'؛ '.join(p.last_corrections[-4:])}")
         if p.vocabulary:
@@ -472,6 +474,16 @@ class CompanionService:
             proactive=msg,
             suggested_prompt=prompt,
         )
+
+    def memory_dump(self) -> dict:
+        """كشف كامل للذاكرة لتصفحها من الإعدادات (كل شيء بلا اقتصاص)."""
+        return {
+            "profile": self.profile.model_dump(),
+            "memories": list(self.memories),
+            "tasks": [t.model_dump() for t in self.tasks],
+            "history": [m.model_dump() for m in self.history],
+            "summary": self.summary or None,
+        }
 
     def reset(self) -> None:
         self._store.delete_all()

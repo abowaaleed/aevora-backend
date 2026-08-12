@@ -56,6 +56,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
   String? _proactive;
   String? _suggestedPrompt;
   bool _proactiveDismissed = false;
+  bool _hideTasksPanel = true;
+  bool _hideMemoryPanel = true;
 
   @override
   void initState() {
@@ -469,9 +471,19 @@ class _CompanionScreenState extends State<CompanionScreen> {
               ],
             ),
           ),
-          _statChip(Icons.memory_rounded, 'ذاكرة: ${_memories.length}'),
+          _clickableChip(
+            Icons.memory_rounded,
+            'ذاكرة: ${_memories.length}',
+            active: !_hideMemoryPanel,
+            onTap: () => setState(() => _hideMemoryPanel = !_hideMemoryPanel),
+          ),
           const SizedBox(width: 8),
-          _statChip(Icons.task_alt_rounded, 'مهام: $_taskCount'),
+          _clickableChip(
+            Icons.task_alt_rounded,
+            'مهام: $_taskCount',
+            active: !_hideTasksPanel,
+            onTap: () => setState(() => _hideTasksPanel = !_hideTasksPanel),
+          ),
           const SizedBox(width: 8),
           IconButton(
             onPressed: _resetMemory,
@@ -491,19 +503,32 @@ class _CompanionScreenState extends State<CompanionScreen> {
     return parts.join(' · ');
   }
 
-  Widget _statChip(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
+  Widget _clickableChip(IconData icon, String label,
+      {required bool active, required VoidCallback onTap}) {
+    return Tooltip(
+      message: active ? 'إخفاء' : 'إظهار',
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: _green, size: 13),
-          const SizedBox(width: 4),
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
-        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: active
+                ? _green.withValues(alpha: 0.15)
+                : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: active ? Border.all(color: _green.withValues(alpha: 0.4)) : null,
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: active ? _green : Colors.white54, size: 13),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: TextStyle(
+                      color: active ? _green : Colors.white70, fontSize: 11)),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -582,28 +607,40 @@ class _CompanionScreenState extends State<CompanionScreen> {
   }
 
   bool _hasExtraPanels() {
-    return _tasks.isNotEmpty || _memories.isNotEmpty ||
-        _goals.isNotEmpty || _vocab.isNotEmpty || _corrections.isNotEmpty;
+    final showTasks = !_hideTasksPanel && _tasks.isNotEmpty;
+    final showMemory = !_hideMemoryPanel && _hasMemoryContent();
+    return showTasks || showMemory;
+  }
+
+  bool _hasMemoryContent() {
+    return _memories.isNotEmpty ||
+        _goals.isNotEmpty ||
+        _vocab.isNotEmpty ||
+        _corrections.isNotEmpty;
   }
 
   Widget _infoPanels() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (_tasks.isNotEmpty) ...[_tasksPanel(), const SizedBox(height: 10)],
-        if (_memories.isNotEmpty || _goals.isNotEmpty ||
-            _vocab.isNotEmpty || _corrections.isNotEmpty) ...[
-          _memoryPanel(),
-          const SizedBox(height: 10),
-        ],
-      ],
-    );
+    final children = <Widget>[];
+    if (!_hideTasksPanel && _tasks.isNotEmpty) {
+      children.add(_tasksPanel());
+      children.add(const SizedBox(height: 10));
+    }
+    if (!_hideMemoryPanel && _hasMemoryContent()) {
+      children.add(_memoryPanel());
+      children.add(const SizedBox(height: 10));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
   }
 
   Widget _tasksPanel() {
     return _panelCard(
       icon: Icons.task_alt_rounded,
       title: 'مهامك',
+      onClose: () => setState(() => _hideTasksPanel = true),
+      actions: InkWell(
+        onTap: _addTask,
+        child: const Icon(Icons.add_circle_outline_rounded, color: _green, size: 20),
+      ),
       child: Column(children: [for (final t in _tasks) _taskRow(t)]),
     );
   }
@@ -641,6 +678,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
     return _panelCard(
       icon: Icons.memory_rounded,
       title: 'ما أعرفه عنك (${items.length})',
+      onClose: () => setState(() => _hideMemoryPanel = true),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -656,7 +694,13 @@ class _CompanionScreenState extends State<CompanionScreen> {
     );
   }
 
-  Widget _panelCard({required IconData icon, required String title, required Widget child}) {
+  Widget _panelCard({
+    required IconData icon,
+    required String title,
+    required Widget child,
+    VoidCallback? onClose,
+    Widget? actions,
+  }) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(14)),
@@ -670,10 +714,18 @@ class _CompanionScreenState extends State<CompanionScreen> {
               Text(title,
                   style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
               const Spacer(),
-              InkWell(
-                onTap: _addTask,
-                child: const Icon(Icons.add_circle_outline_rounded, color: _green, size: 20),
-              ),
+              if (actions != null) ...[
+                actions,
+                const SizedBox(width: 6),
+              ],
+              if (onClose != null)
+                Tooltip(
+                  message: 'إخفاء',
+                  child: InkWell(
+                    onTap: onClose,
+                    child: const Icon(Icons.close_rounded, color: Colors.white38, size: 20),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 8),

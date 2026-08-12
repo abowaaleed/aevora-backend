@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../config.dart';
 import 'key_setup_screen.dart';
+import 'memory_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final KeySettings keys;
@@ -97,6 +98,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: _openEdit,
             icon: const Icon(Icons.edit),
             label: const Text('تعديل المفاتيح'),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            color: const Color(0xFF141A2A),
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.psychology_rounded, color: Color(0xFF81C784)),
+              title: const Text('ذاكرة المساعد', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('تصفح كل ما يعرفه عنك: اسمك، اهتماماتك، حقائقك، مهامك',
+                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_left, color: Colors.white38),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => MemoryScreen(keys: widget.keys)),
+              ),
+            ),
           ),
           const SizedBox(height: 24),
           const Text('استهلاك الخطة المجانية اليوم',

@@ -25,6 +25,12 @@ async def companion_state():
     return get_companion_service().get_state()
 
 
+@router.get("/memory")
+async def companion_memory():
+    """كشف كامل لما يعرفه المساعد عن المستخدم (للتصفح من الإعدادات)."""
+    return get_companion_service().memory_dump()
+
+
 @router.post("/chat")
 async def companion_chat(request: CompanionChatRequest):
     """محادثة متدفقة (SSE) مع المساعد الشخصي — بذاكرة دائمة وسياق كامل."""

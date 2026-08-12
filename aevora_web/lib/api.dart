@@ -146,6 +146,14 @@ Future<Map<String, dynamic>> companionState(KeySettings keys) async {
   return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
 }
 
+Future<Map<String, dynamic>> companionMemory(KeySettings keys) async {
+  final res = await apiGet('/companion/memory', keys);
+  if (res.statusCode != 200) {
+    throw Exception('فشل جلب الذاكرة (${res.statusCode}): ${res.body}');
+  }
+  return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+}
+
 Future<void> companionAddTask(KeySettings keys, String text, {String? due}) async {
   final res = await apiPost('/companion/tasks', keys,
       body: {'text': text, 'due': ?due});
