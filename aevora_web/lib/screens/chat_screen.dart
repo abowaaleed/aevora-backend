@@ -50,20 +50,36 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = false;
   bool _isListening = false;
   bool _isThinking = false;
+  bool _showDownButton = false;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScrollChanged);
     _loadHistory();
   }
 
   @override
   void dispose() {
+    _scroll.removeListener(_onScrollChanged);
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
     _playingId.dispose();
     super.dispose();
+  }
+
+  bool get _nearBottom {
+    if (!_scroll.hasClients) return true;
+    final pos = _scroll.position;
+    return pos.maxScrollExtent - pos.pixels < 120;
+  }
+
+  void _onScrollChanged() {
+    final show = !_nearBottom;
+    if (show != _showDownButton && mounted) {
+      setState(() => _showDownButton = show);
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -110,13 +126,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!_scroll.hasClients) return;
+      // لا نسحب المستخدم إلى الأسفل قسراً وهو يقرأ المحادثة القديمة؛
+      // يستخدم زر السهم عندما يريد العودة لآخر رسالة.
+      if (!_nearBottom) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
     });
   }
 
@@ -280,17 +298,45 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           _topBar(),
           Expanded(
-            child: ListView.builder(
-              controller: _scroll,
-              padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) => _MessageBubble(
-                message: _messages[index],
-                playingId: _playingId,
-                onSpeak: (id, rate) =>
-                    _speak(_messages[index].text, messageId: id, rate: rate),
-                onStop: _stopPlayback,
-              ),
+            child: Stack(
+              children: [
+                ListView.builder(
+                  controller: _scroll,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _messages.length,
+                  itemBuilder: (context, index) => _MessageBubble(
+                    message: _messages[index],
+                    playingId: _playingId,
+                    onSpeak: (id, rate) =>
+                        _speak(_messages[index].text, messageId: id, rate: rate),
+                    onStop: _stopPlayback,
+                  ),
+                ),
+                if (_showDownButton)
+                  Positioned(
+                    right: 14,
+                    bottom: 10,
+                    child: FloatingActionButton.small(
+                      heroTag: 'chat_down',
+                      backgroundColor: const Color(0xFF1D3A1D),
+                      foregroundColor: Colors.white,
+                      onPressed: () {
+                        setState(() => _showDownButton = false);
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (_scroll.hasClients) {
+                            _scroll.animateTo(
+                              _scroll.position.maxScrollExtent,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        });
+                      },
+                      tooltip: 'الانتقال لآخر رسالة',
+                      child: const Icon(Icons.keyboard_arrow_down_rounded),
+                    ),
+                  ),
+              ],
             ),
           ),
           if (_isThinking)

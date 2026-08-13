@@ -248,8 +248,11 @@ Future<void> speakProfessionalStreaming(
 
   final completer = Completer<void>();
   _streamCompleter = completer;
-  var scheduled = 0.0;
-  final base = ctx.currentTime + 0.08;
+  // الوقت المطلق (في خط زمني سياق الصوت) الذي يبدأ عنده المقطع التالي.
+  // يُضبَط دائماً ألا يكون في الماضي: فالمقطع الأول قد يصل بعد زمن شبكة
+  // أطول من 0.08 ثانية، فإذا بُرمج في الماضي بدأت المقاطع الأولى دفعة واحدة
+  // فينتج صوت مشوَّش في أول الكلام.
+  var nextStart = 0.0;
 
   await _streamTtsChunks(
     apiKey: apiKey,
@@ -269,8 +272,13 @@ Future<void> speakProfessionalStreaming(
       src.buffer = buffer;
       src.playbackRate.value = rate;
       src.connect(ctx.destination);
-      final when = base + scheduled;
-      scheduled += frames / sampleRate;
+      // لا تُبرمج المقاطع في الماضي أبداً حتى لا تتزاحم وتشوّش أول الكلام.
+      if (nextStart < ctx.currentTime + 0.05) {
+        nextStart = ctx.currentTime + 0.05;
+      }
+      src.start(nextStart);
+      // مدة التشغيل الفعلية مع مراعاة سرعة التشغيل لتفادي فجوات/تداخل.
+      nextStart += frames / sampleRate / rate;
       _streamLast = src;
       _streamSources.add(src);
       src.onended = ((web.Event _) {
@@ -280,13 +288,12 @@ Future<void> speakProfessionalStreaming(
           completer.complete();
         }
       }).toJS;
-      src.start(when);
     },
   );
 
-  if (scheduled > 0 && !_streamStop) {
+  if (nextStart > 0 && !_streamStop) {
     await completer.future.timeout(
-      Duration(seconds: 1 + (scheduled + 10).ceil()),
+      Duration(seconds: 1 + (nextStart - ctx.currentTime + 10).ceil()),
       onTimeout: () {},
     );
   } else if (!completer.isCompleted) {
