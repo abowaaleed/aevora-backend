@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../api.dart';
+import '../client/client_companion.dart';
 import '../config.dart';
 
 class MemoryScreen extends StatefulWidget {
@@ -32,7 +32,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
       _error = null;
     });
     try {
-      final d = await companionMemory(widget.keys);
+      final d = await LocalCompanion.loadState();
       if (!mounted) return;
       setState(() => _data = d);
     } catch (e) {
@@ -134,8 +134,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
             title: 'ملخص المحادثات السابقة',
             body: _data!['summary'] as String,
           ),
-        if (_data?['history'] is List && (_data!['history'] as List).isNotEmpty)
-          _historyCard((_data!['history'] as List).cast<Map<String, dynamic>>()),
+        if (_data?['recent'] is List && (_data!['recent'] as List).isNotEmpty)
+          _historyCard((_data!['recent'] as List).cast<Map<String, dynamic>>()),
         const SizedBox(height: 12),
         const Text(
           'كل هذه المعلومات تُستعمل أثناء محادثتك: اذكر مثلاً «ابحث عن خيوط طباعة تناسب طابعتتي» '

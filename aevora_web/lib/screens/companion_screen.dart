@@ -1,13 +1,10 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
-import '../api.dart';
+import '../client/client_companion.dart';
+import '../client/client_voice.dart';
 import '../config.dart';
 import '../widgets/plain_text_paste_dialog.dart';
 
@@ -36,14 +33,11 @@ class _CompanionScreenState extends State<CompanionScreen> {
   final ScrollController _scroll = ScrollController();
   final List<_Msg> _messages = [];
   final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
   final ValueNotifier<String?> _playingId = ValueNotifier<String?>(null);
 
   bool _loading = true;
   bool _sending = false;
   bool _isListening = false;
-  bool _isSpeaking = false;
-  bool _audioUnlocked = false;
   String _error = '';
 
   String? _name;
@@ -63,13 +57,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
   @override
   void initState() {
     super.initState();
-    _player.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() => _isSpeaking = false);
-        _playingId.value = null;
-      }
-    });
     _refresh();
+    _maybeProactive();
   }
 
   @override
@@ -77,47 +66,13 @@ class _CompanionScreenState extends State<CompanionScreen> {
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
-    _player.dispose();
     _playingId.dispose();
     super.dispose();
   }
 
-  Future<void> _unlockAudio() async {
-    if (_audioUnlocked) return;
-    try {
-      await _player.stop();
-      await _player.play(BytesSource(_silentWav()));
-      _audioUnlocked = true;
-    } catch (_) {}
-  }
-
-  Uint8List _silentWav() {
-    const sampleRate = 8000;
-    const dataLen = 800;
-    final b = BytesBuilder();
-    b.add([0x52, 0x49, 0x46, 0x46]);
-    b.add(_le32(36 + dataLen));
-    b.add([0x57, 0x41, 0x56, 0x45]);
-    b.add([0x66, 0x6d, 0x74, 0x20]);
-    b.add(_le32(16));
-    b.add(_le16(1));
-    b.add(_le16(1));
-    b.add(_le32(sampleRate));
-    b.add(_le32(sampleRate));
-    b.add(_le16(1));
-    b.add(_le16(8));
-    b.add([0x64, 0x61, 0x74, 0x61]);
-    b.add(_le32(dataLen));
-    b.add(Uint8List(dataLen));
-    return b.toBytes();
-  }
-
-  List<int> _le32(int v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff];
-  List<int> _le16(int v) => [v & 0xff, (v >> 8) & 0xff];
-
   Future<void> _refresh() async {
     try {
-      final s = await companionState(widget.keys);
+      final s = await LocalCompanion.loadState();
       if (!mounted) return;
       setState(() {
         _name = s['profile']?['name'] as String?;
@@ -130,7 +85,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
         _tasks = (s['tasks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         _taskCount = _tasks.where((t) => t['completed'] != true).length;
 
-        // لا تُظهر المبادرة إذا أُغلقت يدوياً في هذه الجلسة
         if (!_proactiveDismissed) {
           _proactive = s['proactive'] as String?;
           _suggestedPrompt = s['suggested_prompt'] as String?;
@@ -162,9 +116,16 @@ class _CompanionScreenState extends State<CompanionScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'تعذر الاتصال بالمساعد: $e';
+        _error = 'تعذر تحميل المساعد: $e';
       });
     }
+  }
+
+  Future<void> _maybeProactive() async {
+    try {
+      await LocalCompanion.maybeGenerateProactive(widget.keys.geminiKey);
+    } catch (_) {}
+    await _refresh();
   }
 
   void _scrollToBottom() {
@@ -182,7 +143,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
   Future<void> _send(String text) async {
     final clean = text.trim();
     if (clean.isEmpty || _sending) return;
-    await _unlockAudio();
     setState(() {
       _messages.add(_Msg(clean, true));
       _sending = true;
@@ -197,9 +157,9 @@ class _CompanionScreenState extends State<CompanionScreen> {
     setState(() => _messages.add(assistant));
 
     try {
-      final reply = await streamCompanion(
-        clean,
-        widget.keys,
+      final reply = await LocalCompanion.streamReply(
+        apiKey: widget.keys.geminiKey,
+        message: clean,
         onChunk: (partial) {
           assistant.text += partial;
           if (mounted) setState(() {});
@@ -209,14 +169,12 @@ class _CompanionScreenState extends State<CompanionScreen> {
       assistant.text = reply;
       if (mounted) setState(() {});
       _scrollToBottom();
-      // تشغيل صوتي تلقائي بعد الرد
       await _speak(reply, messageId: assistant.id);
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
     } finally {
       if (mounted) setState(() => _sending = false);
-      // تحديث المهام/الذاكرة بعد التحليل، والمبادرة محمية بواسطة _proactiveDismissed
       await _refresh();
     }
   }
@@ -225,36 +183,20 @@ class _CompanionScreenState extends State<CompanionScreen> {
     if (text.isEmpty) return;
     try {
       if (_playingId.value == messageId) {
-        await _player.stop();
+        stopSpeaking();
         _playingId.value = null;
-        if (mounted) setState(() => _isSpeaking = false);
         return;
       }
-      await _player.stop();
+      stopSpeaking();
       _playingId.value = messageId;
-      if (mounted) setState(() => _isSpeaking = true);
-      final url =
-          '$apiBaseUrl/voice/synthesize?text=${Uri.encodeComponent(text)}&voice=ar-SA-HamedNeural&rate=${Uri.encodeComponent(rate ?? '+0%')}&pitch=+0%25';
-      final res = await http.post(Uri.parse(url), headers: authHeaders(widget.keys));
-      if (res.statusCode == 200) {
-        await _player.play(BytesSource(res.bodyBytes));
-      } else {
-        _playingId.value = null;
-        if (mounted) setState(() => _isSpeaking = false);
-      }
+      await speakText(text, rate: rate == '-25%' ? 0.75 : 1.0);
+      _playingId.value = null;
     } catch (_) {
       _playingId.value = null;
-      if (mounted) setState(() => _isSpeaking = false);
     }
   }
 
   Future<void> _toggleVoice() async {
-    await _unlockAudio();
-    if (_isSpeaking) {
-      await _player.stop();
-      _playingId.value = null;
-      if (mounted) setState(() => _isSpeaking = false);
-    }
     if (_isListening) {
       await _stopAndTranscribe();
       return;
@@ -283,27 +225,10 @@ class _CompanionScreenState extends State<CompanionScreen> {
       if (mounted) setState(() => _sending = true);
       final audioBytes = (await http.get(Uri.parse(path))).bodyBytes;
 
-      final uploadReq = http.MultipartRequest(
-        'POST',
-        Uri.parse('$apiBaseUrl/voice/transcribe'),
+      final text = await groqTranscribe(
+        apiKey: widget.keys.groqKey,
+        wavBytes: audioBytes,
       );
-      uploadReq.headers.addAll(authHeaders(widget.keys));
-      uploadReq.files.add(http.MultipartFile.fromBytes(
-        'file',
-        audioBytes,
-        filename: 'companion_voice.wav',
-      ));
-      final res = await uploadReq.send().timeout(const Duration(minutes: 2));
-      final body = await res.stream.bytesToString();
-      if (res.statusCode != 200) {
-        throw Exception('التعرف على الصوت فشل (${res.statusCode}): $body');
-      }
-      final text = (jsonDecode(body)['text'] ?? '').toString().trim();
-      if (text.isEmpty) {
-        _addError('لم يُفهم الكلام. حاول مرة أخرى.');
-        if (mounted) setState(() => _sending = false);
-        return;
-      }
       if (mounted) setState(() => _sending = false);
       await _send(text);
     } catch (e) {
@@ -339,20 +264,20 @@ class _CompanionScreenState extends State<CompanionScreen> {
       _proactiveDismissed = true;
     });
     try {
-      await companionAcknowledge(widget.keys);
+      await LocalCompanion.acknowledgeProactive();
     } catch (_) {}
   }
 
   Future<void> _toggleTask(Map<String, dynamic> task) async {
     try {
-      await companionToggleTask(widget.keys, task['id'] as String);
+      await LocalCompanion.toggleTask(task['id'] as String);
     } catch (_) {}
     await _refresh();
   }
 
   Future<void> _deleteTask(Map<String, dynamic> task) async {
     try {
-      await companionDeleteTask(widget.keys, task['id'] as String);
+      await LocalCompanion.deleteTask(task['id'] as String);
     } catch (_) {}
     await _refresh();
   }
@@ -386,7 +311,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
     );
     if (text != null && text.isNotEmpty) {
       try {
-        await companionAddTask(widget.keys, text);
+        await LocalCompanion.addTask(text);
       } catch (_) {}
       await _refresh();
     }
@@ -416,7 +341,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
     );
     if (ok == true) {
       try {
-        await companionReset(widget.keys);
+        await LocalCompanion.reset();
       } catch (_) {}
       _proactiveDismissed = false;
       await _refresh();
@@ -577,10 +502,12 @@ class _CompanionScreenState extends State<CompanionScreen> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
-                onPressed: _sending ? null : () {
-                  _dismissProactive();
-                  _send(_suggestedPrompt!);
-                },
+                onPressed: _sending
+                    ? null
+                    : () {
+                        _dismissProactive();
+                        _send(_suggestedPrompt!);
+                      },
                 style: TextButton.styleFrom(
                   backgroundColor: Colors.white.withValues(alpha: 0.08),
                   foregroundColor: Colors.white,
@@ -608,9 +535,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
           playingId: _playingId,
           onSpeak: (id, rate) => _speak(m.text, messageId: id, rate: rate),
           onStop: () async {
-            await _player.stop();
+            stopSpeaking();
             _playingId.value = null;
-            if (mounted) setState(() => _isSpeaking = false);
           },
         );
       },
@@ -665,7 +591,9 @@ class _CompanionScreenState extends State<CompanionScreen> {
           child: InkWell(
             onTap: () => _toggleTask(t),
             child: Text(t['text'] as String? ?? '',
-                style: TextStyle(color: Colors.white, fontSize: 13,
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
                     decoration: done ? TextDecoration.lineThrough : null,
                     decorationColor: Colors.white38)),
           ),
@@ -696,7 +624,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
           for (final item in items.take(12))
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Text(item, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              child: Text(item,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
             ),
           if (items.length > 12)
             const Text('والمزيد...', style: TextStyle(color: Colors.white38, fontSize: 12)),
@@ -723,7 +652,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
               Icon(icon, color: _green, size: 17),
               const SizedBox(width: 6),
               Text(title,
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
               const Spacer(),
               if (actions != null) ...[
                 actions,
@@ -751,18 +681,25 @@ class _CompanionScreenState extends State<CompanionScreen> {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       color: const Color(0xFF0D1424),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
             child: TextField(
               controller: _input,
               textDirection: TextDirection.rtl,
-              style: const TextStyle(color: Colors.white),
-              onSubmitted: _send,
+              style: const TextStyle(color: Colors.white, height: 1.5),
+              keyboardType: TextInputType.multiline,
+              minLines: 1,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              onSubmitted: (v) => _send(v),
               decoration: InputDecoration(
                 hintText: 'اكتب لصديقك...',
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
                 fillColor: const Color(0xFF141A2A),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
               ),
             ),
@@ -856,16 +793,29 @@ class _BubbleState extends State<_Bubble> {
 
   Future<void> _play({bool slow = false}) async {
     if (_isPlaying) {
-      setState(() { _playingNormal = false; _playingSlow = false; });
+      setState(() {
+        _playingNormal = false;
+        _playingSlow = false;
+      });
       await widget.onStop();
       return;
     }
     setState(() {
-      if (slow) { _playingSlow = true; _playingNormal = false; }
-      else { _playingNormal = true; _playingSlow = false; }
+      if (slow) {
+        _playingSlow = true;
+        _playingNormal = false;
+      } else {
+        _playingNormal = true;
+        _playingSlow = false;
+      }
     });
     await widget.onSpeak(widget.message.id, slow ? '-25%' : '+0%');
-    if (mounted) setState(() { _playingNormal = false; _playingSlow = false; });
+    if (mounted) {
+      setState(() {
+        _playingNormal = false;
+        _playingSlow = false;
+      });
+    }
   }
 
   @override
@@ -876,7 +826,8 @@ class _BubbleState extends State<_Bubble> {
       child: Align(
         alignment: m.isUser ? Alignment.centerLeft : Alignment.centerRight,
         child: Column(
-          crossAxisAlignment: m.isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+          crossAxisAlignment:
+              m.isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -885,7 +836,8 @@ class _BubbleState extends State<_Bubble> {
                 color: m.isUser ? const Color(0xFF1D3A1D) : const Color(0xFF141A2A),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Text(m.text, textDirection: TextDirection.rtl,
+              child: Text(m.text,
+                  textDirection: TextDirection.rtl,
                   textAlign: TextAlign.right,
                   style: const TextStyle(color: Colors.white, height: 1.6, fontSize: 15)),
             ),
@@ -895,18 +847,25 @@ class _BubbleState extends State<_Bubble> {
               children: [
                 _ActionButton(
                   icon: _playingNormal
-                      ? const SizedBox(width: 14, height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54))
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white54))
                       : Icon(_isPlaying ? Icons.stop_rounded : Icons.volume_up_rounded,
-                          size: 16, color: _isPlaying ? _green : Colors.white54),
+                          size: 16,
+                          color: _isPlaying ? _green : Colors.white54),
                   onPressed: () => _play(),
                   tooltip: 'استماع',
                 ),
                 const SizedBox(width: 8),
                 _ActionButton(
                   icon: _playingSlow
-                      ? const SizedBox(width: 14, height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54))
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white54))
                       : const Icon(Icons.speed_rounded, size: 16, color: Colors.white54),
                   onPressed: () => _play(slow: true),
                   tooltip: 'استماع ببطء',

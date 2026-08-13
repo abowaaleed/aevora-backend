@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../api.dart';
 import '../config.dart';
 
 class KeySetupScreen extends StatefulWidget {
@@ -47,15 +46,6 @@ class _KeySetupScreenState extends State<KeySetupScreen> {
         groqKey: groq,
         email: _emailCtrl.text.trim(),
       );
-      final keys = await AppStorage.load();
-      final health = await apiGet('/health/', keys);
-      if (health.statusCode != 200) {
-        setState(() {
-          _status = 'تعذّر الوصول إلى الخادم. تحقق من الرابط ثم أعد المحاولة.';
-          _saving = false;
-        });
-        return;
-      }
       if (mounted) {
         if (widget.editing) {
           Navigator.of(context).pop(true);
@@ -103,7 +93,7 @@ class _KeySetupScreenState extends State<KeySetupScreen> {
                 const SizedBox(height: 24),
                 const Text(
                   'أدخل مفاتيح API المجانية الخاصة بك (من Google AI Studio و/أو Groq). '
-                  'لا تُرسل المفاتيح إلى أي طرف إلا خادم ايفورا الذي يستخدمها لحسابك فقط.',
+                  'تُرسل المفاتيح مباشرة من متصفحك إلى مزودي الخدمة، وتُحفظ على جهازك فقط.',
                   style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.6),
                 ),
                 const SizedBox(height: 24),

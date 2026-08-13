@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../api.dart';
+import '../client/client_usage.dart';
 import '../config.dart';
 import 'key_setup_screen.dart';
 import 'memory_screen.dart';
@@ -38,7 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _usageError = null;
     });
     try {
-      final u = await usageState(widget.keys);
+      final u = await LocalUsage.today();
       if (!mounted) return;
       setState(() => _usage = u);
     } catch (e) {
@@ -120,8 +120,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 4),
           Text(
             _usage?['date'] == null
-                ? 'حسب مفاتيحك على هذا الجهاز'
-                : 'آخر تحديث: ${_usage?['date']}',
+                ? 'محفوظ على هذا المتصفح'
+                : 'يوم ${_usage?['date']}',
             style: const TextStyle(color: Colors.white38, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -135,8 +135,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'تُحفظ المفاتيح على جهازك (localStorage) فقط، ولا تُرسل إلا إلى خادم ايفورا '
-            'داخل رؤوس الطلبات ليستعملها في الرد عبر حسابك المجاني الخاص — بلا أي تسجيل.',
+            'تعمل ايفورا بالكامل داخل متصفحك: تُحفظ مفاتيحك في هذا المتصفح فقط، وتُرسل الطلبات '
+            'مباشرة من جهازك إلى Gemini وGroq بحسابك المجاني — دون أي خادم وسيط. '
+            'وكل ملفاتك وذاكرتك ومحادثاتك محفوظة محلياً على جهازك (IndexedDB) ولا تغادر جهازك أبداً.',
             style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.7),
           ),
           const SizedBox(height: 24),
@@ -195,22 +196,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _usageRow('chat', 'Gemini', u['gemini'] as Map<String, dynamic>?),
+          _usageRow('chat', 'Gemini', u['gemini'] as Map<String, dynamic>?),
             const SizedBox(height: 14),
             _usageRow('chat', 'Groq', u['groq'] as Map<String, dynamic>?),
             const SizedBox(height: 14),
-            _usageRow('mic', 'التعرف على الصوت', u['stt_gemini'] as Map<String, dynamic>?,
-                isStt: true),
-            const SizedBox(height: 14),
-            _usageRow('mic', 'التعرف على الصوت (Groq)', u['stt_groq'] as Map<String, dynamic>?,
-                isStt: true),
+            _usageRow('mic', 'التعرف على الصوت (Groq Whisper)',
+                u['stt_groq'] as Map<String, dynamic>?, isStt: true),
             const SizedBox(height: 12),
             Row(
               children: [
-                const Text('مهام المساعد الشخصي: ',
+                const Text('رسائل المساعد الشخصي: ',
                     style: TextStyle(color: Colors.white54, fontSize: 12)),
                 Text(
-                  '${(u['events'] as Map<String, dynamic>?)?['companion_messages'] ?? 0} رسالة',
+                  '${(u['companion'] as num?)?.toInt() ?? 0} رسالة',
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
               ],

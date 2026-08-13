@@ -1,0 +1,152 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import 'client_usage.dart';
+
+/// رسالة محادثة بسيطة للطلبات المباشرة.
+class ClientMsg {
+  final String role; // 'user' | 'model'
+  final String text;
+  const ClientMsg(this.role, this.text);
+}
+
+const kDefaultModel = 'gemini-2.5-flash';
+
+const _base = 'https://generativelanguage.googleapis.com/v1beta';
+
+/// استدعاء Gemini مباشرة من متصفح المستخدم بمفتاحه الخاص (بدون أي خادم وسيط).
+Future<String> geminiStreamChat({
+  required String apiKey,
+  required List<ClientMsg> messages,
+  String? system,
+  double temperature = 0.7,
+  String model = kDefaultModel,
+  void Function(String partial)? onChunk,
+  bool recordUsage = true,
+}) async {
+  if (apiKey.trim().isEmpty) {
+    throw Exception('مفتاح Gemini غير مضبوط. أضِفه من الإعدادات.');
+  }
+  final url = Uri.parse(
+      '$_base/models/$model:streamGenerateContent?alt=sse&key=${apiKey.trim()}');
+  final req = http.Request('POST', url);
+  req.headers['Content-Type'] = 'application/json';
+  req.body = jsonEncode({
+    'contents': [
+      for (final m in messages)
+        {
+          'role': m.role == 'user' ? 'user' : 'model',
+          'parts': [
+            {'text': m.text},
+          ],
+        },
+    ],
+    if (system != null && system.trim().isNotEmpty)
+      'systemInstruction': {
+        'parts': [
+          {'text': system},
+        ],
+      },
+    'generationConfig': {
+      'temperature': temperature,
+      'maxOutputTokens': 4096,
+    },
+  });
+
+  final res = await req.send().timeout(const Duration(minutes: 4));
+  if (res.statusCode != 200) {
+    final body = await res.stream.bytesToString();
+    throw Exception(_extractError(body, res.statusCode));
+  }
+
+  var full = '';
+  await for (final line
+      in res.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+    final t = line.trim();
+    if (!t.startsWith('data:')) continue;
+    final dataStr = t.substring(5).trim();
+    if (dataStr.isEmpty || dataStr == '[DONE]') continue;
+    try {
+      final obj = jsonDecode(dataStr);
+      final parts = (obj['candidates'] as List?)?[0]?['content']?['parts'] as List?;
+      if (parts != null) {
+        for (final p in parts) {
+          final txt = (p as Map?)?['text']?.toString() ?? '';
+          if (txt.isNotEmpty) {
+            full += txt;
+            onChunk?.call(txt);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  if (full.trim().isEmpty) {
+    throw Exception('لم يصل رد من Gemini. تحقق من المفتاح أو حاول لاحقاً.');
+  }
+  if (recordUsage) LocalUsage.recordGemini();
+  return full;
+}
+
+/// نسخة غير متدفقة (للتحليل الخلفي مثل استخراج الذاكرة).
+Future<String> geminiChatSync({
+  required String apiKey,
+  required List<ClientMsg> messages,
+  String? system,
+  double temperature = 0.3,
+  String model = kDefaultModel,
+  bool recordUsage = true,
+}) async {
+  if (apiKey.trim().isEmpty) {
+    throw Exception('مفتاح Gemini غير مضبوط.');
+  }
+  final url = Uri.parse('$_base/models/$model:generateContent?key=${apiKey.trim()}');
+  final req = http.Request('POST', url);
+  req.headers['Content-Type'] = 'application/json';
+  req.body = jsonEncode({
+    'contents': [
+      for (final m in messages)
+        {
+          'role': m.role == 'user' ? 'user' : 'model',
+          'parts': [
+            {'text': m.text},
+          ],
+        },
+    ],
+    if (system != null && system.trim().isNotEmpty)
+      'systemInstruction': {
+        'parts': [
+          {'text': system},
+        ],
+      },
+    'generationConfig': {
+      'temperature': temperature,
+      'maxOutputTokens': 2048,
+    },
+  });
+
+  final res = await http.post(url, headers: {'Content-Type': 'application/json'}, body: req.body)
+      .timeout(const Duration(minutes: 3));
+  if (res.statusCode != 200) {
+    throw Exception(_extractError(utf8.decode(res.bodyBytes), res.statusCode));
+  }
+  final obj = jsonDecode(utf8.decode(res.bodyBytes));
+  final parts = (obj['candidates'] as List?)?[0]?['content']?['parts'] as List?;
+  final text = parts == null
+      ? ''
+      : parts.map((p) => (p as Map?)?['text']?.toString() ?? '').join();
+  if (text.trim().isEmpty) {
+    throw Exception('لم يصل رد من Gemini.');
+  }
+  if (recordUsage) LocalUsage.recordGemini();
+  return text;
+}
+
+String _extractError(String body, int status) {
+  try {
+    final obj = jsonDecode(body);
+    final msg = obj['error']?['message']?.toString();
+    if (msg != null && msg.isNotEmpty) return msg;
+  } catch (_) {}
+  return 'فشل الاتصال بـ Gemini ($status)';
+}

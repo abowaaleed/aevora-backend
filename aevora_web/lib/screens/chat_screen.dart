@@ -1,15 +1,20 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
-import '../api.dart';
+import '../client/client_llm.dart';
+import '../client/client_rag.dart';
+import '../client/client_storage.dart';
+import '../client/client_voice.dart';
 import '../config.dart';
 import '../widgets/plain_text_paste_dialog.dart';
+
+const _chatSystemPrompt = '''
+أنت «ايفورا» — مساعد ذكي يجيب بلغة المستخدم (العربية أو الإنجليزية).
+إذا وُجدت مقتطفات من مستندات مرفوعة، أجب منها بدقة ودون اختلاق.
+إن لم تجد الإجابة في المستندات فقل ذلك بوضوح.
+''';
 
 class ChatScreen extends StatefulWidget {
   final KeySettings keys;
@@ -23,8 +28,8 @@ class _ChatMessage {
   final String id;
   String text;
   final bool isUser;
-  _ChatMessage(this.text, this.isUser, {String? id})
-      : id = id ?? '${DateTime.now().microsecondsSinceEpoch}_${text.hashCode}';
+  _ChatMessage(this.text, this.isUser)
+      : id = '${DateTime.now().microsecondsSinceEpoch}_${text.hashCode}';
 }
 
 class _ChatScreenState extends State<ChatScreen> {
@@ -35,33 +40,16 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scroll = ScrollController();
 
   final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
-
   final ValueNotifier<String?> _playingId = ValueNotifier<String?>(null);
 
   bool _isLoading = false;
   bool _isListening = false;
   bool _isThinking = false;
-  bool _isSpeaking = false;
-  bool _audioUnlocked = false;
-  String _sessionId = '';
 
   @override
   void initState() {
     super.initState();
-    _sessionId = 'web_session_${DateTime.now().millisecondsSinceEpoch}';
-    _messages.add(_ChatMessage(
-      'مرحباً بك في ايفورا!\n\nارفع مستنداتك من تبويب «المستندات» ثم اسألني عنها، أو اسألني مباشرة بأي لغة.',
-      false,
-    ));
-    _player.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() {
-          _isSpeaking = false;
-          _playingId.value = null;
-        });
-      }
-    });
+    _loadHistory();
   }
 
   @override
@@ -69,9 +57,48 @@ class _ChatScreenState extends State<ChatScreen> {
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
-    _player.dispose();
     _playingId.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final v = await LocalDb.kvGetValue('chat_messages');
+      if (v is List && v.isNotEmpty) {
+        final msgs = v
+            .whereType<Map>()
+            .map((m) => _ChatMessage(
+                (m['text'] ?? '').toString(), m['role'] == 'user'))
+            .where((m) => m.text.trim().isNotEmpty)
+            .toList();
+        if (msgs.isNotEmpty && mounted) {
+          setState(() => _messages.addAll(msgs));
+          _scrollToBottom();
+          return;
+        }
+      }
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _messages.add(_ChatMessage(
+          'مرحباً بك في ايفورا!\n\nارفع مستنداتك من تبويب «المستندات» ثم اسألني عنها، أو اسألني مباشرة بأي لغة.',
+          false,
+        ));
+      });
+    }
+  }
+
+  Future<void> _persistMessages() async {
+    try {
+      final list = _messages
+          .where((m) => m.text.trim().isNotEmpty)
+          .map((m) => {'role': m.isUser ? 'user' : 'model', 'text': m.text})
+          .toList();
+      if (list.length > 100) {
+        list.removeRange(0, list.length - 100);
+      }
+      await LocalDb.kvPut('chat_messages', list);
+    } catch (_) {}
   }
 
   void _scrollToBottom() {
@@ -86,46 +113,8 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  /// فتح قناة الصوت عند أول تفاعل (إيماءة) حتى يعمل الرد الصوتي التلقائي
-  /// بعد اكتمال البث — المتصفحات تحظر التشغيل خارج إيماءة المستخدم.
-  Future<void> _unlockAudio() async {
-    if (_audioUnlocked) return;
-    try {
-      await _player.stop();
-      await _player.play(BytesSource(_silentWav()));
-      _audioUnlocked = true;
-    } catch (_) {
-      // الفشل غير حرج — زر السماعة لكل رسالة يعمل دائماً بلمسة مباشرة.
-    }
-  }
-
-  Uint8List _silentWav() {
-    const sampleRate = 8000;
-    const dataLen = 800;
-    final b = BytesBuilder();
-    b.add([0x52, 0x49, 0x46, 0x46]);
-    b.add(_le32(36 + dataLen));
-    b.add([0x57, 0x41, 0x56, 0x45]);
-    b.add([0x66, 0x6d, 0x74, 0x20]);
-    b.add(_le32(16));
-    b.add(_le16(1));
-    b.add(_le16(1));
-    b.add(_le32(sampleRate));
-    b.add(_le32(sampleRate));
-    b.add(_le16(1));
-    b.add(_le16(8));
-    b.add([0x64, 0x61, 0x74, 0x61]);
-    b.add(_le32(dataLen));
-    b.add(Uint8List(dataLen));
-    return b.toBytes();
-  }
-
-  List<int> _le32(int v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff];
-  List<int> _le16(int v) => [v & 0xff, (v >> 8) & 0xff];
-
   Future<void> _send(String text) async {
     if (text.trim().isEmpty || _isLoading) return;
-    await _unlockAudio();
     setState(() {
       _messages.add(_ChatMessage(text, true));
       _isLoading = true;
@@ -136,11 +125,29 @@ class _ChatScreenState extends State<ChatScreen> {
     final assistant = _ChatMessage('', false);
     setState(() => _messages.add(assistant));
 
+    var system = _chatSystemPrompt;
     try {
-      final reply = await streamChat(
-        text,
-        _sessionId,
-        widget.keys,
+      if (await hasFiles()) {
+        final chunks = await retrieveChunks(text, k: 6);
+        final ctx = buildContextPrompt(chunks);
+        if (ctx.isNotEmpty) system = '$_chatSystemPrompt\n\n$ctx';
+      }
+    } catch (_) {}
+
+    try {
+      final history = _messages
+          .where((m) => m.text.trim().isNotEmpty)
+          .toList();
+      final trimmed =
+          history.length <= 20 ? history : history.sublist(history.length - 20);
+      final msgs = [
+        for (final m in trimmed) ClientMsg(m.isUser ? 'user' : 'model', m.text),
+      ];
+
+      final reply = await geminiStreamChat(
+        apiKey: widget.keys.geminiKey,
+        messages: msgs,
+        system: system,
         onChunk: (partial) {
           assistant.text += partial;
           if (mounted) setState(() {});
@@ -150,10 +157,12 @@ class _ChatScreenState extends State<ChatScreen> {
       assistant.text = reply;
       if (mounted) setState(() {});
       _scrollToBottom();
+      await _persistMessages();
       await _speak(reply, messageId: assistant.id);
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
+      await _persistMessages();
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -163,40 +172,25 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
     try {
       if (_playingId.value == messageId) {
-        await _player.stop();
+        stopSpeaking();
         _playingId.value = null;
-        setState(() => _isSpeaking = false);
         return;
       }
-      await _player.stop();
+      stopSpeaking();
       _playingId.value = messageId;
-      setState(() => _isSpeaking = true);
-      final url =
-          '$apiBaseUrl/voice/synthesize?text=${Uri.encodeComponent(text)}&voice=ar-SA-HamedNeural&rate=${Uri.encodeComponent(rate ?? '+0%')}&pitch=+0%25';
-      final res = await http.post(Uri.parse(url), headers: authHeaders(widget.keys));
-      if (res.statusCode == 200) {
-        await _player.play(BytesSource(res.bodyBytes));
-      } else {
-        _playingId.value = null;
-        setState(() => _isSpeaking = false);
-      }
+      await speakText(text, rate: rate == '-25%' ? 0.75 : 1.0);
+      _playingId.value = null;
     } catch (_) {
       _playingId.value = null;
-      setState(() => _isSpeaking = false);
     }
   }
 
   Future<void> _stopPlayback() async {
-    await _player.stop();
+    stopSpeaking();
     _playingId.value = null;
-    setState(() => _isSpeaking = false);
   }
 
   Future<void> _toggleVoice() async {
-    await _unlockAudio();
-    if (_isSpeaking) {
-      await _stopPlayback();
-    }
     if (_isListening) {
       await _stopAndTranscribe();
       return;
@@ -210,7 +204,7 @@ class _ChatScreenState extends State<ChatScreen> {
         const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000),
         path: 'evora_voice.wav',
       );
-      setState(() => _isListening = true);
+      if (mounted) setState(() => _isListening = true);
     } catch (e) {
       _addError('فشل بدء التسجيل: $e');
     }
@@ -219,39 +213,25 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _stopAndTranscribe() async {
     try {
       final path = await _recorder.stop();
-      setState(() => _isListening = false);
+      if (mounted) setState(() => _isListening = false);
       if (path == null) return;
 
-      setState(() => _isThinking = true);
+      if (mounted) setState(() => _isThinking = true);
       final audioBytes = (await http.get(Uri.parse(path))).bodyBytes;
 
-      final uploadReq = http.MultipartRequest(
-        'POST',
-        Uri.parse('$apiBaseUrl/voice/transcribe'),
+      final text = await groqTranscribe(
+        apiKey: widget.keys.groqKey,
+        wavBytes: audioBytes,
       );
-      uploadReq.headers.addAll(authHeaders(widget.keys));
-      uploadReq.files.add(http.MultipartFile.fromBytes(
-        'file',
-        audioBytes,
-        filename: 'voice_query.wav',
-      ));
-      final res = await uploadReq.send().timeout(const Duration(minutes: 2));
-      final body = await res.stream.bytesToString();
-      if (res.statusCode != 200) {
-        throw Exception('التعرف على الصوت فشل (${res.statusCode}): $body');
-      }
-      final text = (jsonDecode(body)['text'] ?? '').toString().trim();
-      if (text.isEmpty) {
-        _addError('لم يُفهم الكلام. حاول مرة أخرى.');
-        return;
-      }
-      setState(() => _isThinking = false);
+      if (mounted) setState(() => _isThinking = false);
       await _send(text);
     } catch (e) {
-      setState(() {
-        _isThinking = false;
-        _isListening = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isThinking = false;
+          _isListening = false;
+        });
+      }
       _addError('خطأ في الصوت: $e');
     }
   }
@@ -284,7 +264,6 @@ class _ChatScreenState extends State<ChatScreen> {
               itemCount: _messages.length,
               itemBuilder: (context, index) => _MessageBubble(
                 message: _messages[index],
-                keys: widget.keys,
                 playingId: _playingId,
                 onSpeak: (id, rate) =>
                     _speak(_messages[index].text, messageId: id, rate: rate),
@@ -337,18 +316,25 @@ class _ChatScreenState extends State<ChatScreen> {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       color: const Color(0xFF0D1424),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
             child: TextField(
               controller: _input,
               textDirection: TextDirection.rtl,
-              style: const TextStyle(color: Colors.white),
-              onSubmitted: _send,
+              style: const TextStyle(color: Colors.white, height: 1.5),
+              keyboardType: TextInputType.multiline,
+              minLines: 1,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              onSubmitted: (v) => _send(v),
               decoration: InputDecoration(
                 hintText: 'اكتب سؤالك...',
                 hintStyle: const TextStyle(color: Colors.white38),
                 filled: true,
                 fillColor: const Color(0xFF141A2A),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
               ),
             ),
@@ -395,13 +381,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
 class _MessageBubble extends StatefulWidget {
   final _ChatMessage message;
-  final KeySettings keys;
   final ValueNotifier<String?> playingId;
   final Future<void> Function(String id, String? rate) onSpeak;
   final Future<void> Function() onStop;
   const _MessageBubble({
     required this.message,
-    required this.keys,
     required this.playingId,
     required this.onSpeak,
     required this.onStop,
@@ -481,7 +465,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
       child: Align(
         alignment: m.isUser ? Alignment.centerLeft : Alignment.centerRight,
         child: Column(
-          crossAxisAlignment: m.isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+          crossAxisAlignment:
+              m.isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -506,7 +491,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       ? const SizedBox(
                           width: 14,
                           height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                          child:
+                              CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
                         )
                       : Icon(
                           _isPlaying ? Icons.stop_rounded : Icons.volume_up_rounded,
@@ -522,7 +508,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       ? const SizedBox(
                           width: 14,
                           height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                          child:
+                              CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
                         )
                       : const Icon(Icons.speed_rounded, size: 16, color: Colors.white54),
                   onPressed: () => _play(slow: true),

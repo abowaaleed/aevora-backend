@@ -1,18 +1,9 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
-import '../api.dart';
+import '../client/client_rag.dart';
+import '../client/client_storage.dart';
 import '../config.dart';
-
-class _DocItem {
-  final String filename;
-  final String status;
-  final String progress;
-  _DocItem(this.filename, this.status, this.progress);
-}
 
 class DocumentScreen extends StatefulWidget {
   final KeySettings keys;
@@ -20,6 +11,13 @@ class DocumentScreen extends StatefulWidget {
 
   @override
   State<DocumentScreen> createState() => _DocumentScreenState();
+}
+
+class _DocItem {
+  final String filename;
+  final String status;
+  final int size;
+  _DocItem(this.filename, this.status, this.size);
 }
 
 class _DocumentScreenState extends State<DocumentScreen> {
@@ -33,52 +31,23 @@ class _DocumentScreenState extends State<DocumentScreen> {
   void initState() {
     super.initState();
     _load();
-    _startAutoRefresh();
   }
 
-  @override
-  void dispose() {
-    _refreshTimer?.cancel();
-    super.dispose();
-  }
-
-  Timer? _refreshTimer;
-
-  /// تحديث تلقائي كل 4 ثوانٍ ما دامت هناك ملفات قيد المعالجة/الاستعادة.
-  void _startAutoRefresh() {
-    _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (mounted && !_uploading) {
-        final hasPending = _files.any((f) => f.status != 'indexed');
-        if (hasPending) _load(silent: true);
-      }
-    });
-  }
-
-  Future<void> _load({bool silent = false}) async {
-    if (!silent) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
+  Future<void> _load() async {
     try {
-      final res = await apiGet('/rag/files', widget.keys);
-      if (res.statusCode != 200) {
-        throw Exception('الخادم رفض الطلب (${res.statusCode})');
-      }
-      final list = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+      final rows = await LocalDb.listFiles();
+      if (!mounted) return;
       setState(() {
-        _files = list
+        _files = rows
             .map((f) => _DocItem(
-                (f['filename'] ?? '').toString(),
+                (f['name'] ?? '').toString(),
                 (f['status'] ?? '').toString(),
-                (f['progress'] ?? '').toString()))
+                (f['size'] as num?)?.toInt() ?? 0))
             .toList();
         _loading = false;
       });
     } catch (e) {
-      if (silent) return;
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -86,12 +55,12 @@ class _DocumentScreenState extends State<DocumentScreen> {
     }
   }
 
-  Future<void> _pickAndUpload() async {
+  Future<void> _pickAndIndex() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'docx', 'txt', 'xlsx', 'xls', 'csv', 'jpg', 'jpeg', 'png', 'webp'],
+        allowedExtensions: ['pdf', 'txt'],
       );
       if (result == null || result.files.isEmpty) return;
 
@@ -106,38 +75,27 @@ class _DocumentScreenState extends State<DocumentScreen> {
         _uploadStatus = '';
       });
 
-      var uploaded = 0;
+      var done = 0;
       final total = files.length;
       for (final f in files) {
         if (!mounted) return;
-        setState(() {
-          _uploadStatus = 'جاري رفع (${uploaded + 1}/$total): ${f.name}';
-        });
+        setState(() => _uploadStatus = 'جاري الفهرسة (${done + 1}/$total): ${f.name}');
         try {
-          final res = await apiUpload('/rag/upload', widget.keys, [
-            MapEntry('files', Uint8ListBytes(f.bytes!, f.name)),
-          ]);
-          final body = await res.stream.bytesToString();
-          if (res.statusCode != 200) {
-            setState(() => _error = 'فشل رفع «${f.name}» (${res.statusCode}): $body');
-          }
+          await indexLocalFile(f.name, f.bytes!);
         } catch (e) {
-          setState(() => _error = 'فشل رفع «${f.name}»: $e');
+          setState(() => _error = 'فشل قراءة «${f.name}»: $e');
           await Future.delayed(const Duration(seconds: 1));
         }
-        uploaded++;
+        done++;
       }
 
       if (mounted) {
         setState(() {
           _uploading = false;
-          _uploadStatus = uploaded == total ? 'تم رفع جميع الملفات' : 'اكتمل الرفع';
+          _uploadStatus = done == total ? 'تمت فهرسة جميع الملفات' : 'اكتملت الفهرسة';
         });
       }
       await _load();
-      Future.delayed(const Duration(seconds: 4), () {
-        if (mounted) _load(silent: true);
-      });
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -150,12 +108,18 @@ class _DocumentScreenState extends State<DocumentScreen> {
 
   Future<void> _viewContent(_DocItem item) async {
     try {
-      final res = await apiGet(
-          '/rag/files/${Uri.encodeComponent(item.filename)}/content', widget.keys);
-      if (res.statusCode != 200) {
-        throw Exception('غير جاهز بعد (${res.statusCode})');
+      final rows = await LocalDb.listFiles();
+      Map<String, dynamic>? meta;
+      for (final f in rows) {
+        if ((f['name'] ?? '') == item.filename) {
+          meta = f;
+          break;
+        }
       }
-      final content = (jsonDecode(res.body)['content'] ?? '').toString();
+      final content = (meta?['text'] ?? '').toString();
+      if (content.trim().isEmpty) {
+        throw Exception('لا يوجد نص مستخرج من هذا الملف.');
+      }
       if (!mounted) return;
       showDialog(
         context: context,
@@ -181,22 +145,26 @@ class _DocumentScreenState extends State<DocumentScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e')));
     }
   }
 
   Future<void> _delete(_DocItem item) async {
     try {
-      final res = await apiDelete(
-          '/rag/files/${Uri.encodeComponent(item.filename)}', widget.keys);
-      if (res.statusCode != 200) {
-        throw Exception('حذف فشل (${res.statusCode})');
-      }
+      await LocalDb.deleteFile(item.filename);
+      await LocalDb.clearChunksForFile(item.filename);
       await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e')));
     }
+  }
+
+  String _sizeLabel(int bytes) {
+    if (bytes < 1024) return '$bytes بايت';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} ك.ب';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} م.ب';
   }
 
   @override
@@ -223,7 +191,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: Column(
                     children: [
                       FilledButton.icon(
-                        onPressed: _uploading ? null : _pickAndUpload,
+                        onPressed: _uploading ? null : _pickAndIndex,
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF4CAF50),
                         ),
@@ -236,7 +204,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                               )
                             : const Icon(Icons.upload_file),
                         label: Text(
-                          _uploading ? 'رفع جارٍ...' : 'رفع مستندات (PDF / Word / Excel / صور)',
+                          _uploading ? 'فهرسة جارية...' : 'رفع مستندات (PDF / TXT)',
                         ),
                       ),
                       if (_uploadStatus.isNotEmpty)
@@ -248,6 +216,12 @@ class _DocumentScreenState extends State<DocumentScreen> {
                             style: const TextStyle(color: Color(0xFF81C784), fontSize: 13),
                           ),
                         ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'تُقرأ الملفات وتُبحث محلياً داخل متصفحك — لا تُرفع لأي خادم.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white38, fontSize: 12),
+                      ),
                     ],
                   ),
                 ),
@@ -263,7 +237,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: _files.isEmpty
                       ? const Center(
                           child: Text(
-                            'لا توجد مستندات مرفوعة بعد.\nارفع ملفاتك لتبدأ.',
+                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT لتبدأ البحث فيها.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),
@@ -273,32 +247,25 @@ class _DocumentScreenState extends State<DocumentScreen> {
                           itemCount: _files.length,
                           itemBuilder: (context, index) {
                             final f = _files[index];
-                            final isIndexed = f.status == 'indexed';
                             return Card(
                               color: const Color(0xFF141A2A),
                               margin: const EdgeInsets.symmetric(vertical: 4),
                               child: ListTile(
-                                leading: Icon(
-                                  isIndexed
-                                      ? Icons.check_circle
-                                      : Icons.sync,
-                                  color: isIndexed
-                                      ? const Color(0xFF81C784)
-                                      : Colors.orangeAccent,
+                                leading: const Icon(
+                                  Icons.check_circle,
+                                  color: Color(0xFF81C784),
                                 ),
                                 title: Text(f.filename,
                                     style: const TextStyle(color: Colors.white)),
                                 subtitle: Text(
-                                  isIndexed
-                                      ? (f.progress.isEmpty ? 'جاهز' : f.progress)
-                                      : 'قيد المعالجة... ${f.progress}',
+                                  'جاهز · ${_sizeLabel(f.size)}',
                                   style: const TextStyle(color: Colors.white54, fontSize: 12),
                                 ),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     IconButton(
-                                      onPressed: isIndexed ? () => _viewContent(f) : null,
+                                      onPressed: () => _viewContent(f),
                                       icon: const Icon(Icons.visibility),
                                       color: Colors.white54,
                                     ),
