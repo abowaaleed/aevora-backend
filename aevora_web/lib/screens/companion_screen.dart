@@ -4,8 +4,10 @@ import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
 import '../client/client_companion.dart';
+import '../client/client_export.dart';
 import '../client/client_voice.dart';
 import '../config.dart';
+import '../widgets/export_sheet.dart';
 import '../widgets/plain_text_paste_dialog.dart';
 
 class CompanionScreen extends StatefulWidget {
@@ -317,6 +319,19 @@ class _CompanionScreenState extends State<CompanionScreen> {
     }
   }
 
+  Future<void> _exportChat() async {
+    final msgs = _messages
+        .where((m) => m.text.trim().isNotEmpty)
+        .map((m) => {'role': m.isUser ? 'user' : 'model', 'text': m.text})
+        .toList();
+    final text = buildExportText(msgs, title: 'محادثة مع مساعد ايفورا');
+    final now = DateTime.now();
+    final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    await showExportSheet(context, text: text, filename: 'aevora_companion_$stamp.txt');
+  }
+
   Future<void> _resetMemory() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -421,6 +436,12 @@ class _CompanionScreenState extends State<CompanionScreen> {
             onTap: () => setState(() => _hideTasksPanel = !_hideTasksPanel),
           ),
           const SizedBox(width: 8),
+          IconButton(
+            onPressed: _exportChat,
+            tooltip: 'تصدير المحادثة مع ترويج ايفورا',
+            icon: const Icon(Icons.ios_share_rounded, color: Colors.white70, size: 20),
+          ),
+          const SizedBox(width: 4),
           IconButton(
             onPressed: _resetMemory,
             tooltip: 'مسح الذاكرة',

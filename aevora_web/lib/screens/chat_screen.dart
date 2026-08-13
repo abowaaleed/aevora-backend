@@ -3,11 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
+import '../client/client_export.dart';
 import '../client/client_llm.dart';
 import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_voice.dart';
 import '../config.dart';
+import '../widgets/export_sheet.dart';
 import '../widgets/plain_text_paste_dialog.dart';
 
 const _chatSystemPrompt = '''
@@ -251,12 +253,26 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _messages.add(_ChatMessage(msg, false)));
   }
 
+  Future<void> _exportChat() async {
+    final msgs = _messages
+        .where((m) => m.text.trim().isNotEmpty)
+        .map((m) => {'role': m.isUser ? 'user' : 'model', 'text': m.text})
+        .toList();
+    final text = buildExportText(msgs);
+    final now = DateTime.now();
+    final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    await showExportSheet(context, text: text, filename: 'aevora_chat_$stamp.txt');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF070B14),
       body: Column(
         children: [
+          _topBar(),
           Expanded(
             child: ListView.builder(
               controller: _scroll,
@@ -306,6 +322,39 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           _inputBar(),
+        ],
+      ),
+    );
+  }
+
+  Widget _topBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      color: const Color(0xFF0D1424),
+      child: Row(
+        children: [
+          const Icon(Icons.auto_awesome_rounded, color: _green, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('ايفورا — محادثة',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+                SizedBox(height: 2),
+                Text('يعمل بالكامل داخل متصفحك · البيانات محفوظة محلياً',
+                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: _exportChat,
+            tooltip: 'تصدير المحادثة مع ترويج ايفورا',
+            icon: const Icon(Icons.ios_share_rounded, color: Colors.white70),
+          ),
         ],
       ),
     );
