@@ -130,7 +130,8 @@ Uint8List _wrapPcmInWav(Uint8List pcm, int sampleRate) {
 web.HTMLAudioElement? _professionalPlayer;
 String? _currentUrl;
 
-/// تشغيل صوت احترافي مولّد من Gemini عبر عنصر صوت في المتصفح.
+/// تشغيل صوت احترافي مولّد من Gemini عبر عنصر صوت في المتصفح
+/// (يُنتظر توليد الصوت كاملاً أولاً ثم يُشغّل — النسخة غير المتدفقة).
 Future<void> speakProfessional(
   String text, {
   required String apiKey,
@@ -182,7 +183,230 @@ void _revokeAudioUrl() {
   }
 }
 
-/// نطق النص: يفضّل الصوت الاحترافي (Gemini) إن وُجد المفتاح، وإلا يعود للمتصفح.
+// ---------- النطق الاحترافي المتدفق (يبدأ فوراً بدل انتظار الملف كاملاً) ----------
+
+web.AudioContext? _audioCtx;
+final List<web.AudioBufferSourceNode> _streamSources = [];
+bool _streamStop = false;
+Completer<void>? _streamCompleter;
+web.AudioBufferSourceNode? _streamLast;
+
+web.AudioContext _ensureAudioContext() {
+  var ctx = _audioCtx;
+  if (ctx == null) {
+    ctx = web.AudioContext();
+    _audioCtx = ctx;
+  }
+  return ctx;
+}
+
+/// يُستدعى عند أي تفاعل مستخدم (إرسال/تسجيل) لإنشاء سياق الصوت داخل إيماءة
+/// المستخدم حتى لا يُحجب التشغيل المتدفق لاحقاً بسياسة التشغيل التلقائي.
+void warmUpAudio() {
+  try {
+    final ctx = _ensureAudioContext();
+    if (ctx.state == 'suspended') {
+      unawaited(ctx.resume().toDart);
+    }
+  } catch (_) {}
+}
+
+void _stopStreamPlayback() {
+  _streamStop = true;
+  for (final s in _streamSources) {
+    try {
+      s.stop();
+    } catch (_) {}
+  }
+  _streamSources.clear();
+  _streamLast = null;
+  final c = _streamCompleter;
+  if (c != null && !c.isCompleted) c.complete();
+  _streamCompleter = null;
+}
+
+/// نطق احترافي متدفق: يبدأ إصدار الصوت فور وصول أول مقطع من Gemini
+/// (بدل انتظار التوليد الكامل)، مع تشغيل تدريجي عبر Web Audio API.
+Future<void> speakProfessionalStreaming(
+  String text, {
+  required String apiKey,
+  double rate = 1.0,
+}) async {
+  _stopStreamPlayback();
+  _streamStop = false;
+  final ctx = _ensureAudioContext();
+  try {
+    if (ctx.state == 'suspended') {
+      await ctx.resume().toDart;
+    }
+  } catch (_) {}
+  // إن أصر المتصفح على إبقاء الصوت معلقاً فلن يسمع المستخدم شيئاً؛
+  // ارجع خطأً ليُحوَّل النطق إلى صوت المتصفح الفوري.
+  if (ctx.state == 'suspended') {
+    throw Exception('سياسة التشغيل التلقائي أوقفت الصوت الاحترافي');
+  }
+
+  final completer = Completer<void>();
+  _streamCompleter = completer;
+  var scheduled = 0.0;
+  final base = ctx.currentTime + 0.08;
+
+  await _streamTtsChunks(
+    apiKey: apiKey,
+    text: text,
+    onChunk: (pcm, sampleRate) {
+      if (_streamStop) return;
+      final frames = pcm.length ~/ 2;
+      if (frames <= 0) return;
+      final f32 = Float32List(frames);
+      final bd = ByteData.sublistView(pcm);
+      for (var i = 0; i < frames; i++) {
+        f32[i] = bd.getInt16(i * 2, Endian.little) / 32768.0;
+      }
+      final buffer = ctx.createBuffer(1, frames, sampleRate);
+      buffer.copyToChannel(f32.toJS, 0);
+      final src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.playbackRate.value = rate;
+      src.connect(ctx.destination);
+      final when = base + scheduled;
+      scheduled += frames / sampleRate;
+      _streamLast = src;
+      _streamSources.add(src);
+      src.onended = ((web.Event _) {
+        if (!_streamStop &&
+            identical(src, _streamLast) &&
+            !completer.isCompleted) {
+          completer.complete();
+        }
+      }).toJS;
+      src.start(when);
+    },
+  );
+
+  if (scheduled > 0 && !_streamStop) {
+    await completer.future.timeout(
+      Duration(seconds: 1 + (scheduled + 10).ceil()),
+      onTimeout: () {},
+    );
+  } else if (!completer.isCompleted) {
+    completer.complete();
+  }
+  _streamSources.clear();
+  _streamLast = null;
+}
+
+/// سحب صوت Gemini على شكل أجزاء (SSE) واستدعاء [onChunk] لكل مقطع L16 يصل.
+Future<void> _streamTtsChunks({
+  required String apiKey,
+  required String text,
+  required void Function(Uint8List pcm, int sampleRate) onChunk,
+}) async {
+  if (apiKey.trim().isEmpty) {
+    throw Exception('أضِف مفتاح Gemini من الإعدادات للنطق الاحترافي.');
+  }
+  var clean = text.trim();
+  if (clean.isEmpty) throw Exception('لا يوجد نص للنطق');
+  clean = clean
+      .replaceAll(RegExp(r'[*_`#>|]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (clean.length > 3000) clean = '${clean.substring(0, 3000)}.';
+  final prompt = 'Synthesize speech for the following text. '
+      'Speak naturally. Do not read this instruction aloud.\n\n$clean';
+
+  final url = Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$kGeminiTtsModel:streamGenerateContent?alt=sse&key=${apiKey.trim()}');
+  final req = http.Request('POST', url)
+    ..headers['Content-Type'] = 'application/json'
+    ..body = jsonEncode({
+      'contents': [
+        {
+          'parts': [
+            {'text': prompt},
+          ],
+        },
+      ],
+      'generationConfig': {
+        'responseModalities': ['AUDIO'],
+        'speechConfig': {
+          'voiceConfig': {
+            'prebuiltVoiceConfig': {'voiceName': kGeminiTtsVoice},
+          },
+        },
+      },
+    });
+
+  final res = await req.send().timeout(const Duration(seconds: 60));
+  if (res.statusCode != 200) {
+    throw Exception('النطق الاحترافي فشل (${res.statusCode}): '
+        '${_sttError(await res.stream.bytesToString())}');
+  }
+
+  var pending = '';
+  await for (final frag in res.stream.transform(utf8.decoder)) {
+    if (_streamStop) break;
+    pending += frag;
+    while (true) {
+      final cr = pending.indexOf('\r\n\r\n');
+      final lf = pending.indexOf('\n\n');
+      int end;
+      int width;
+      if (cr != -1 && (lf == -1 || cr < lf)) {
+        end = cr;
+        width = 4;
+      } else if (lf != -1) {
+        end = lf;
+        width = 2;
+      } else {
+        break;
+      }
+      final block = pending.substring(0, end);
+      pending = pending.substring(end + width);
+      _handleSseBlock(block, onChunk);
+    }
+  }
+  _handleSseBlock(pending, onChunk);
+}
+
+void _handleSseBlock(
+    String block, void Function(Uint8List pcm, int sampleRate) onChunk) {
+  for (final line in block.split('\n')) {
+    final t = line.trim();
+    if (!t.startsWith('data:')) continue;
+    final data = t.substring(5).trim();
+    if (data.isEmpty || data == '[DONE]') continue;
+    try {
+      final root = jsonDecode(data);
+      if (root is! Map) continue;
+      final parts = (root['candidates'] as List?)?[0]?['content']?['parts'];
+      if (parts is! List) continue;
+      for (final p in parts) {
+        final inline = (p as Map?)?['inlineData'];
+        if (inline is! Map) continue;
+        final b64 = (inline['data'] ?? '').toString();
+        if (b64.isEmpty) continue;
+        onChunk(base64Decode(b64),
+            _sampleRateFromMime((inline['mimeType'] ?? '').toString()));
+      }
+    } catch (_) {}
+  }
+}
+
+int _sampleRateFromMime(String mime) {
+  var rate = 24000;
+  for (final part in mime.split(';')) {
+    final t = part.trim().toLowerCase();
+    if (t.startsWith('rate=')) {
+      final v = int.tryParse(t.substring(5).trim());
+      if (v != null && v > 0) rate = v;
+    }
+  }
+  return rate;
+}
+
+/// نطق النص: يفضّل النطق الاحترافي المتدفق من Gemini (يبدأ فوراً) إن وُجد
+/// المفتاح، وإلا يعود فوراً لصوت المتصفح (Web Speech).
 Future<void> speakSmart(
   String text, {
   String? apiKey,
@@ -190,9 +414,11 @@ Future<void> speakSmart(
 }) async {
   if (apiKey != null && apiKey.trim().isNotEmpty) {
     try {
-      await speakProfessional(text, apiKey: apiKey, rate: rate);
+      await speakProfessionalStreaming(text, apiKey: apiKey, rate: rate);
       return;
-    } catch (_) {}
+    } catch (_) {
+      _stopStreamPlayback();
+    }
   }
   await speakText(text, rate: rate);
 }
@@ -283,6 +509,7 @@ Future<void> speakText(String text, {double rate = 1.0}) async {
 void stopSpeaking() {
   speechSynthesis?.cancel();
   _stopProfessionalPlayer();
+  _stopStreamPlayback();
 }
 
 // ---------- التعرف على الصوت عبر Groq Whisper (مباشرة من المتصفح) ----------

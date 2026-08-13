@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -23,7 +25,22 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    // عند تطبيق بيانات قادمة من الحساب (مفاتيح أُرسلت من جهاز آخر) نعيد
+    // تحميل المفاتيح حتى تُحدَّث كل الشاشات.
+    SyncStore.onStateApplied = _reloadKeys;
     _load();
+  }
+
+  @override
+  void dispose() {
+    if (SyncStore.onStateApplied == _reloadKeys) {
+      SyncStore.onStateApplied = null;
+    }
+    super.dispose();
+  }
+
+  void _reloadKeys() {
+    unawaited(_load());
   }
 
   Future<void> _load() async {

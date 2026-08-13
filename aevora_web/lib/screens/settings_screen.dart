@@ -147,9 +147,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'تعمل ايفورا بالكامل داخل متصفحك: تُحفظ مفاتيحك في هذا المتصفح فقط، وتُرسل الطلبات '
-            'مباشرة من جهازك إلى Gemini وGroq بحسابك المجاني — دون أي خادم وسيط. '
-            'وكل ملفاتك وذاكرتك ومحادثاتك محفوظة محلياً على جهازك (IndexedDB) ولا تغادر جهازك أبداً.',
+            'تعمل ايفورا بالكامل داخل متصفحك: تُحفظ مفاتيحك في هذا المتصفح '
+            'وتُرسل الطلبات مباشرة من جهازك إلى Gemini وGroq بحسابك المجاني — '
+            'دون أي خادم وسيط. وكل ملفاتك وذاكرتك ومحادثاتك محفوظة محلياً على '
+            'جهازك (IndexedDB)، وعند تسجيل الدخول بحساب Google تُزامن مع '
+            'حسابك لتتوفر على أي جهاز آخر.',
             style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.7),
           ),
           const SizedBox(height: 24),
@@ -256,8 +258,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'المزامنة نشطة: محادثاتك ومهامك وعدّاداتك تتبعك على أي '
-                        'متصفح أو هاتف.',
+                        'المزامنة نشطة: محادثاتك ومفاتيحك وملفاتك ومهامك '
+                        'وعدّاداتك تتبعك على أي متصفح أو هاتف.',
                         style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.5),
                       ),
                     ),

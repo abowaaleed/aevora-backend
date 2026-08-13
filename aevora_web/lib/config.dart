@@ -14,6 +14,13 @@ class KeySettings {
     this.email = '',
     this.hasKeys = false,
   });
+
+  /// صيغة السحابة (تُرفع مع الحساب لتعود في أي جهاز آخر يسجل دخولاً).
+  Map<String, String> toCloudMap() => {
+        'gemini': geminiKey.trim(),
+        'groq': groqKey.trim(),
+        'email': email.trim(),
+      };
 }
 
 /// مفاتيح المستخدم محفوظة محلياً في متصفحه فقط (localStorage) —

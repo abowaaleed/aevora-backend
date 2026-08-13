@@ -140,9 +140,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: 6),
                         const Text(
-                          'لتبقى محادثاتك ومهامك وعدّاداتك ملازمة لك على أي '
-                          'متصفح أو هاتف. (بياناتك تُخزن بأمان تحت حسابك وتُشفَّر '
-                          'اتصالاتك)',
+                          'لتبقى محادثاتك ومفاتيحك وملفاتك ومهامك وعدّاداتك '
+                          'ملازمة لك على أي متصفح أو هاتف. (بياناتك تُخزن بأمان '
+                          'تحت حسابك وتُشفَّر اتصالاتك)',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Colors.white54,
@@ -212,7 +212,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 24),
                 const Text(
                   '🔐 خصوصية تامة: تُرسل محادثاتك للنموذج الذكي للإجابة فقط، '
-                  'وتبقى مفاتيحك على جهازك.',
+                  'وتبقى مفاتيحك محفوظة عندك وتُزامن مع حسابك عند تسجيل الدخول.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.6),
                 ),

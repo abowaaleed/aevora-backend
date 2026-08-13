@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -119,6 +121,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send(String text) async {
     if (text.trim().isEmpty || _isLoading) return;
+    // إنشاء سياق الصوت داخل إيماءة المستخدم حتى يبدأ النطق الاحترافي فوراً
+    // بعد الرد دون أن تحجبه سياسة التشغيل التلقائي.
+    warmUpAudio();
     setState(() {
       _messages.add(_ChatMessage(text, true));
       _isLoading = true;
@@ -162,7 +167,10 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() {});
       _scrollToBottom();
       await _persistMessages();
-      await _speak(reply, messageId: assistant.id);
+      // إنهاء حالة الانشغال فوراً قبل النطق حتى لا تُعلَّق الواجهة على توليد
+      // الصوت؛ النطق التلقائي يعمل بالتوازي ولا يحجب أي زر.
+      if (mounted) setState(() => _isLoading = false);
+      unawaited(_speak(reply, messageId: assistant.id));
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
@@ -200,6 +208,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await _stopAndTranscribe();
       return;
     }
+    warmUpAudio();
     try {
       if (!await _recorder.hasPermission()) {
         _addError('تم رفض إذن الميكروفون.');

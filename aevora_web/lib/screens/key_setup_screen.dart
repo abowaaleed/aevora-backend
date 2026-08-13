@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../client/client_sync.dart';
 import '../config.dart';
 
 class KeySetupScreen extends StatefulWidget {
@@ -46,6 +47,8 @@ class _KeySetupScreenState extends State<KeySetupScreen> {
         groqKey: groq,
         email: _emailCtrl.text.trim(),
       );
+      // رفع المفاتيح مع الحساب (إن كان مسجلاً) لتظهر في أي جهاز آخر.
+      SyncStore.schedulePush();
       if (mounted) {
         if (widget.editing) {
           Navigator.of(context).pop(true);
@@ -93,7 +96,8 @@ class _KeySetupScreenState extends State<KeySetupScreen> {
                 const SizedBox(height: 24),
                 const Text(
                   'أدخل مفاتيح API المجانية الخاصة بك (من Google AI Studio و/أو Groq). '
-                  'تُرسل المفاتيح مباشرة من متصفحك إلى مزودي الخدمة، وتُحفظ على جهازك فقط.',
+                  'تُرسل المفاتيح مباشرة من متصفحك إلى مزودي الخدمة، وتُحفظ على '
+                  'جهازك وتُزامن مع حسابك عند تسجيل الدخول.',
                   style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.6),
                 ),
                 const SizedBox(height: 24),

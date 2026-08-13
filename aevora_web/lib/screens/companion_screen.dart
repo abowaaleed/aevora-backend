@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -145,6 +147,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
   Future<void> _send(String text) async {
     final clean = text.trim();
     if (clean.isEmpty || _sending) return;
+    // إنشاء سياق الصوت داخل إيماءة المستخدم ليعمل النطق الاحترافي فوراً.
+    warmUpAudio();
     setState(() {
       _messages.add(_Msg(clean, true));
       _sending = true;
@@ -171,7 +175,9 @@ class _CompanionScreenState extends State<CompanionScreen> {
       assistant.text = reply;
       if (mounted) setState(() {});
       _scrollToBottom();
-      await _speak(reply, messageId: assistant.id);
+      // إنهاء حالة الانشغال فوراً قبل النطق (النطق التلقائي بالتوازي).
+      if (mounted) setState(() => _sending = false);
+      unawaited(_speak(reply, messageId: assistant.id));
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
@@ -204,6 +210,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
       await _stopAndTranscribe();
       return;
     }
+    warmUpAudio();
     try {
       if (!await _recorder.hasPermission()) {
         _addError('تم رفض إذن الميكروفون.');

@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../config.dart';
 import 'client_auth.dart';
 import 'client_companion.dart';
+import 'client_rag.dart';
 import 'client_storage.dart';
 import 'client_usage.dart';
 
-/// مزامنة بيانات المستخدم (المحادثات، المساعد، العدادات) مع Cloud Firestore
-/// بمفتاح حساب Google — لتبقى كل البيانات ملازمة للمستخدم في أي متصفح/هاتف.
+/// مزامنة بيانات المستخدم (المحادثات، المساعد، العدادات، المفاتيح، الملفات)
+/// مع Cloud Firestore بمفتاح حساب Google — لتبقى كل البيانات ملازمة للمستخدم
+/// في أي متصفح/هاتف.
 ///
 /// النمط: Local-first — كل شيء يعمل محلياً أولاً (IndexedDB) ثم يُرفع
 /// للسحابة بعد أي تعديل (debounce) ويُسحب عند تسجيل الدخول.
@@ -22,6 +26,17 @@ class SyncStore {
   static User? _user;
   static StreamSubscription<User?>? _sub;
   static Completer<void>? _ready;
+  static bool _pushedAfterPull = false;
+
+  // حدود نقل الملفات عبر Firestore (مستند واحد ≤ 1MB).
+  static const _maxSyncChunks = 400;
+  static const _maxSyncDocChars = 450000;
+  static const _maxBlobSyncBytes = 2 * 1024 * 1024;
+  static const _segmentChars = 390000;
+  static const _previewChars = 30000;
+
+  /// يُستدعى بعد تطبيق حالة قادمة من السحابة (لإعادة تحميل المفاتيح في الواجهة).
+  static void Function()? onStateApplied;
 
   static bool get _active => isAuthEnabled && _user != null;
 
@@ -63,10 +78,11 @@ class SyncStore {
   static Future<void> waitForReady() async {
     final ready = _ready;
     if (ready == null) return;
-    await ready.future.timeout(const Duration(seconds: 15), onTimeout: () {});
+    await ready.future.timeout(const Duration(seconds: 20), onTimeout: () {});
   }
 
   static void _pullThenReady(String uid) {
+    _pushedAfterPull = false;
     _ready = Completer<void>();
     unawaited(_pullAndComplete(uid));
   }
@@ -74,6 +90,12 @@ class SyncStore {
   static Future<void> _pullAndComplete(String uid) async {
     await pullFor(uid);
     _ready?.complete();
+    // بعد أول سحب ارفع الحالة المحلية (مفاتيح/ملفات أُدخلت قبل الدخول أو أثناء
+    // عدم الاتصال) حتى تتقارب الأجهزة معاً.
+    if (!_pushedAfterPull) {
+      _pushedAfterPull = true;
+      await pushNow();
+    }
   }
 
   /// سحب بيانات الحساب من Firestore وتطبيقها على IndexedDB المحلي.
@@ -86,6 +108,7 @@ class SyncStore {
       final data = doc.data();
       if (data == null) return;
       await _applyToLocal(data);
+      await _pullBlobs(uid, data);
     } catch (_) {
       // غياب الاتصال أو القواعد لا يعطّل التطبيق؛ يبقى يعمل محلياً.
     }
@@ -104,6 +127,140 @@ class SyncStore {
       final usage = data['usage_history'];
       if (usage is Map && usage.isNotEmpty) {
         await LocalUsage.mergeHistory(Map<String, dynamic>.from(usage));
+      }
+      final keys = data['keys'];
+      if (keys is Map && keys.isNotEmpty) {
+        await _applyCloudKeys(Map<String, dynamic>.from(keys));
+      }
+      await _applyCloudFiles(data);
+    } catch (_) {}
+    try {
+      onStateApplied?.call();
+    } catch (_) {}
+  }
+
+  /// تطبيق مفاتيح قادمة من السحابة دون مسح مفاتيح محلية موجودة
+  /// (الجهاز المحلي مصدر أولاً، والسحابة تملأ الفراغات).
+  static Future<void> _applyCloudKeys(Map<String, dynamic> cloud) async {
+    try {
+      final local = await AppStorage.load();
+      var gemini = local.geminiKey;
+      var groq = local.groqKey;
+      var email = local.email;
+      var changed = false;
+      if (gemini.trim().isEmpty) {
+        final v = cloud['gemini']?.toString().trim() ?? '';
+        if (v.isNotEmpty) {
+          gemini = v;
+          changed = true;
+        }
+      }
+      if (groq.trim().isEmpty) {
+        final v = cloud['groq']?.toString().trim() ?? '';
+        if (v.isNotEmpty) {
+          groq = v;
+          changed = true;
+        }
+      }
+      if (email.trim().isEmpty) {
+        final v = cloud['email']?.toString().trim() ?? '';
+        if (v.isNotEmpty) {
+          email = v;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AppStorage.save(geminiKey: gemini, groqKey: groq, email: email);
+      }
+    } catch (_) {}
+  }
+
+  /// تطبيق الملفات وشرائح البحث القادمة من السحابة للملفات غير الموجودة محلياً
+  /// (الملفات المحلية تبقى هي المصدر وتُرفع هي نفسها).
+  static Future<void> _applyCloudFiles(Map<String, dynamic> data) async {
+    try {
+      final local = await LocalDb.listFiles();
+      final localNames = {
+        for (final f in local) (f['name'] ?? f['id']).toString(),
+      };
+
+      final files = data['files'];
+      if (files is List) {
+        for (final f in files.whereType<Map>()) {
+          final name = (f['name'] ?? f['id']).toString();
+          if (name.isEmpty || localNames.contains(name)) continue;
+          final preview = (f['textPreview'] ?? '').toString();
+          await LocalDb.saveFileMeta({
+            'id': name,
+            'name': name,
+            'size': (f['size'] as num?)?.toInt() ?? 0,
+            'addedAt': (f['addedAt'] as num?)?.toInt() ??
+                DateTime.now().millisecondsSinceEpoch,
+            'text': preview,
+            'status': (f['status'] ?? 'indexed').toString(),
+          });
+        }
+      }
+
+      final chunks = data['chunks'];
+      if (chunks is List && chunks.isNotEmpty) {
+        final byFile = <String, List<Map<String, dynamic>>>{};
+        for (final c in chunks.whereType<Map>()) {
+          final name = (c['file'] ?? '').toString();
+          if (name.isEmpty || localNames.contains(name)) continue;
+          byFile.putIfAbsent(name, () => []).add(Map<String, dynamic>.from(c));
+        }
+        for (final e in byFile.entries) {
+          await LocalDb.clearChunksForFile(e.key);
+          for (final c in e.value) {
+            final text = (c['text'] ?? '').toString();
+            if (text.trim().isEmpty) continue;
+            final idx = (c['idx'] as num?)?.toInt() ?? 0;
+            await LocalDb.saveChunk({
+              'id': '${e.key}::$idx',
+              'file': e.key,
+              'idx': idx,
+              'text': text,
+              'vec': embedText(text),
+            });
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// سحب محتوى الملفات الخام (blobs) للملفات القادمة من السحابة وغير الموجودة
+  /// محلياً، عبر تجزئة base64 مخزنة في مجموعة فرعية لكل حساب.
+  static Future<void> _pullBlobs(
+      String uid, Map<String, dynamic>? data) async {
+    try {
+      final files = data?['files'];
+      if (files is! List || files.isEmpty) return;
+      final local = await LocalDb.listFiles();
+      final localNames = {
+        for (final f in local) (f['name'] ?? f['id']).toString(),
+      };
+      final cloudDocs = await FirebaseFirestore.instance
+          .collection(_collection)
+          .doc(uid)
+          .collection('blobs')
+          .get();
+      for (final doc in cloudDocs.docs) {
+        final name = doc.id;
+        if (name.isEmpty || localNames.contains(name)) continue;
+        final d = doc.data();
+        final segs = d['segments'];
+        if (segs is! Map) continue;
+        final count = (d['count'] as num?)?.toInt() ?? segs.length;
+        if (count <= 0) continue;
+        final sb = StringBuffer();
+        for (var i = 0; i < count; i++) {
+          final s = segs['$i']?.toString() ?? '';
+          if (s.isNotEmpty) sb.write(s);
+        }
+        if (sb.isEmpty) continue;
+        final bytes = base64Decode(sb.toString());
+        await LocalDb.saveFileBlob(name, Uint8ListBytes(bytes, name));
       }
     } catch (_) {}
   }
@@ -131,13 +288,131 @@ class SyncStore {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (_) {}
+    await _pushBlobs(_user!.uid);
   }
 
   static Future<Map<String, dynamic>> _collectLocalState() async {
+    final keys = await AppStorage.load();
+    final files = <Map<String, dynamic>>[];
+    try {
+      final metaRows = await LocalDb.listFiles();
+      for (final f in metaRows) {
+        final text = (f['text'] ?? '').toString();
+        files.add({
+          'id': f['id']?.toString() ?? '',
+          'name': f['name']?.toString() ?? '',
+          'size': (f['size'] as num?)?.toInt() ?? 0,
+          'addedAt': (f['addedAt'] as num?)?.toInt() ?? 0,
+          'status': f['status']?.toString() ?? 'indexed',
+          'textPreview': text.length > _previewChars
+              ? text.substring(0, _previewChars)
+              : text,
+        });
+      }
+    } catch (_) {}
+    var chunks = <Map<String, dynamic>>[];
+    try {
+      final rows = await LocalDb.allChunks();
+      chunks = [
+        for (final c in rows.take(_maxSyncChunks))
+          {
+            'file': c['file']?.toString() ?? '',
+            'idx': (c['idx'] as num?)?.toInt() ?? 0,
+            'text': c['text']?.toString() ?? '',
+          }
+      ];
+      // خفض عدد الشرائح إن اقترب الحجم من حد مستند Firestore (1MB).
+      while (chunks.length > 100 && jsonEncode(chunks).length > _maxSyncDocChars) {
+        chunks = chunks.sublist(0, chunks.length ~/ 2);
+      }
+    } catch (_) {}
     return {
       'chat_messages': await LocalDb.kvGetValue('chat_messages') ?? [],
       'companion': await LocalCompanion.exportState(),
       'usage_history': await LocalUsage.history(),
+      'keys': keys.toCloudMap(),
+      'files': files,
+      'chunks': chunks,
     };
+  }
+
+  /// رفع محتوى الملفات (blobs) عبر تجزئة base64 في مجموعة فرعية، مع تخطّي
+  /// الملفات الكبيرة (أكبر من حد مزامنة الملفات) والملفات غير المتغيّرة
+  /// (بمقارنة بصمة FNV) حتى لا تُرفع من جديد مع كل تعديل بسيط.
+  static Future<void> _pushBlobs(String uid) async {
+    try {
+      final files = await LocalDb.listFiles();
+      final localNames = <String>{};
+      const hashKey = 'synced_blob_hashes';
+      final raw = await LocalDb.kvGetValue(hashKey);
+      final hashes =
+          raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      for (final f in files) {
+        final name = (f['name'] ?? f['id']).toString();
+        if (name.isEmpty) continue;
+        localNames.add(name);
+        final size = (f['size'] as num?)?.toInt() ?? 0;
+        if (size <= 0 || size > _maxBlobSyncBytes) continue;
+        final blob = await LocalDb.fileBlob(name);
+        if (blob == null) continue;
+        final hash = _hashBytes(blob.bytes);
+        if (hashes[name] == hash) continue;
+        await _uploadBlob(uid, name, blob.bytes);
+        hashes[name] = hash;
+      }
+      await LocalDb.kvPut(hashKey, hashes);
+      // حذف أرشيف السحابة لأي ملف لم يعد موجوداً محلياً.
+      final existing = await FirebaseFirestore.instance
+          .collection(_collection)
+          .doc(uid)
+          .collection('blobs')
+          .get();
+      for (final doc in existing.docs) {
+        if (!localNames.contains(doc.id)) {
+          await doc.reference.delete();
+        }
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _uploadBlob(
+      String uid, String name, List<int> bytes) async {
+    final b64 = base64Encode(bytes);
+    final segments = <String, String>{};
+    var idx = 0;
+    var n = 0;
+    while (idx < b64.length) {
+      final end = (idx + _segmentChars) < b64.length
+          ? idx + _segmentChars
+          : b64.length;
+      segments['$n'] = b64.substring(idx, end);
+      idx = end;
+      n++;
+    }
+    await FirebaseFirestore.instance
+        .collection(_collection)
+        .doc(uid)
+        .collection('blobs')
+        .doc(name)
+        .set({
+      'segments': segments,
+      'count': n,
+      'size': bytes.length,
+      'filename': name,
+    }, SetOptions(merge: true));
+  }
+
+  /// بصمة سريعة ومحددة لمحتوى الملف (لتجنب إعادة الرفع عند كل تعديل بسيط).
+  /// قيمها ضمن نطاق الأعداد الدقيقة في JavaScript (أقل من 2^53).
+  static String _hashBytes(List<int> bytes) {
+    var h1 = 5381;
+    var h2 = 0x1F123BB5;
+    for (final b in bytes) {
+      h1 = (h1 * 33) ^ b;
+      h2 = (h2 * 131) + b;
+      h1 &= 0xFFFFFFFF;
+      h2 &= 0xFFFFFFFF;
+    }
+    return '${h1.toRadixString(16)}${h2.toRadixString(16)}';
   }
 }

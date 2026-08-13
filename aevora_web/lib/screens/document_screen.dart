@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../client/client_rag.dart';
 import '../client/client_storage.dart';
+import '../client/client_sync.dart';
 import '../config.dart';
 
 class DocumentScreen extends StatefulWidget {
@@ -82,6 +83,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
         setState(() => _uploadStatus = 'جاري الفهرسة (${done + 1}/$total): ${f.name}');
         try {
           await indexLocalFile(f.name, f.bytes!);
+          // رفع الملف مع الحساب (إن كان مسجلاً) ليتوفر في أي جهاز آخر.
+          SyncStore.schedulePush();
         } catch (e) {
           setState(() => _error = 'فشل قراءة «${f.name}»: $e');
           await Future.delayed(const Duration(seconds: 1));
@@ -154,6 +157,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
     try {
       await LocalDb.deleteFile(item.filename);
       await LocalDb.clearChunksForFile(item.filename);
+      SyncStore.schedulePush();
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -218,7 +222,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
                         ),
                       const SizedBox(height: 6),
                       const Text(
-                        'تُقرأ الملفات وتُبحث محلياً داخل متصفحك — لا تُرفع لأي خادم.',
+                        'تُقرأ الملفات وتُبحث محلياً داخل متصفحك — وعند تسجيل '
+                        'الدخول بحساب Google تُزامن مع حسابك لتعود في أي جهاز آخر.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.white38, fontSize: 12),
                       ),
