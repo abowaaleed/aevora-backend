@@ -29,14 +29,23 @@ class SyncStore {
   static void startListening() {
     if (!isAuthEnabled) return;
     _sub?.cancel();
-    _sub = FirebaseAuth.instance.authStateChanges().listen((user) {
-      _user = user;
-      if (user != null) {
-        _pullThenReady(user.uid);
-      } else {
+    try {
+      _sub = FirebaseAuth.instance.authStateChanges().listen((user) {
+        _user = user;
+        if (user != null) {
+          _pullThenReady(user.uid);
+        } else {
+          _ready = null;
+        }
+      }, onError: (_) {
+        // أي خطأ في تيار الجلسة لا يُسقط التطبيق.
+        _user = null;
         _ready = null;
-      }
-    });
+      });
+    } catch (_) {
+      _user = null;
+      _ready = null;
+    }
   }
 
   /// يُستدعى عند بدء التطبيق: إذا كانت هناك جلسة سابقة يُسحب البيانات قبل عرض

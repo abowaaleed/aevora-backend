@@ -13,12 +13,16 @@ import 'screens/shell.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final keys = await AppStorage.load();
-  await initFirebase();
-  if (isAuthEnabled) {
-    // سحب بيانات الحساب قبل عرض الواجهة، ثم ربط تغيّرات الجلسة.
-    await SyncStore.prepare();
-    SyncStore.startListening();
-    await SyncStore.waitForReady();
+  try {
+    await initFirebase();
+    if (isAuthEnabled) {
+      // سحب بيانات الحساب قبل عرض الواجهة، ثم ربط تغيّرات الجلسة.
+      await SyncStore.prepare();
+      SyncStore.startListening();
+      await SyncStore.waitForReady();
+    }
+  } catch (_) {
+    // أي فشل في Firebase (الشبكة/التهيئة) لا يُسقط التطبيق؛ نعمل محلياً.
   }
   runApp(AevoraWebApp(keys: keys));
 }
@@ -41,12 +45,16 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
     // عند أي تغيّر بالجلسة (دخول/خروج) وجّه تلقائياً بين شاشة الدخول والتطبيق.
     if (isAuthEnabled) {
       _authSub = authStateStream().listen((user) {
-        final nav = _navigatorKey.currentState;
-        if (nav == null) return;
-        nav.pushNamedAndRemoveUntil(
-          user != null ? '/shell' : '/login',
-          (_) => false,
-        );
+        try {
+          final nav = _navigatorKey.currentState;
+          if (nav == null) return;
+          nav.pushNamedAndRemoveUntil(
+            user != null ? '/shell' : '/login',
+            (_) => false,
+          );
+        } catch (_) {
+          // فشل التوجيه لا يُسقط التطبيق.
+        }
       });
     }
   }
