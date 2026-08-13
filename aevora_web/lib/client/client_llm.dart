@@ -11,7 +11,7 @@ class ClientMsg {
   const ClientMsg(this.role, this.text);
 }
 
-const kDefaultModel = 'gemini-2.5-flash';
+const kDefaultModel = 'gemini-3.6-flash';
 
 const _base = 'https://generativelanguage.googleapis.com/v1beta';
 

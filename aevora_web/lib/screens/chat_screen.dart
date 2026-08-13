@@ -180,7 +180,8 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       stopSpeaking();
       _playingId.value = messageId;
-      await speakText(text, rate: rate == '-25%' ? 0.75 : 1.0);
+      await speakSmart(text,
+          apiKey: widget.keys.geminiKey, rate: rate == '-25%' ? 0.75 : 1.0);
       _playingId.value = null;
     } catch (_) {
       _playingId.value = null;

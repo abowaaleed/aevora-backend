@@ -191,7 +191,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
       }
       stopSpeaking();
       _playingId.value = messageId;
-      await speakText(text, rate: rate == '-25%' ? 0.75 : 1.0);
+      await speakSmart(text,
+          apiKey: widget.keys.geminiKey, rate: rate == '-25%' ? 0.75 : 1.0);
       _playingId.value = null;
     } catch (_) {
       _playingId.value = null;
@@ -398,54 +399,77 @@ class _CompanionScreenState extends State<CompanionScreen> {
   Widget _header() {
     return Container(
       color: const Color(0xFF0D1422),
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: const BoxDecoration(
-              color: Color(0xFF1D3A1D),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.psychology_alt_rounded, color: _green, size: 26),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1D3A1D),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.psychology_alt_rounded,
+                    color: _green, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('المساعد الشخصي',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 2),
+                    Text(_buildSubtitle(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12)),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: _exportChat,
+                tooltip: 'تصدير المحادثة مع ترويج ايفورا',
+                icon: const Icon(Icons.ios_share_rounded,
+                    color: Colors.white70, size: 20),
+              ),
+              IconButton(
+                onPressed: _resetMemory,
+                tooltip: 'مسح الذاكرة',
+                icon: const Icon(Icons.delete_sweep_outlined,
+                    color: Colors.white38, size: 20),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
               children: [
-                const Text('المساعد الشخصي',
-                    style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 2),
-                Text(_buildSubtitle(),
-                    style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                _clickableChip(
+                  Icons.memory_rounded,
+                  'ذاكرة: ${_memories.length}',
+                  active: !_hideMemoryPanel,
+                  onTap: () =>
+                      setState(() => _hideMemoryPanel = !_hideMemoryPanel),
+                ),
+                _clickableChip(
+                  Icons.task_alt_rounded,
+                  'مهام: $_taskCount',
+                  active: !_hideTasksPanel,
+                  onTap: () => setState(() => _hideTasksPanel = !_hideTasksPanel),
+                ),
               ],
             ),
-          ),
-          _clickableChip(
-            Icons.memory_rounded,
-            'ذاكرة: ${_memories.length}',
-            active: !_hideMemoryPanel,
-            onTap: () => setState(() => _hideMemoryPanel = !_hideMemoryPanel),
-          ),
-          const SizedBox(width: 8),
-          _clickableChip(
-            Icons.task_alt_rounded,
-            'مهام: $_taskCount',
-            active: !_hideTasksPanel,
-            onTap: () => setState(() => _hideTasksPanel = !_hideTasksPanel),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            onPressed: _exportChat,
-            tooltip: 'تصدير المحادثة مع ترويج ايفورا',
-            icon: const Icon(Icons.ios_share_rounded, color: Colors.white70, size: 20),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            onPressed: _resetMemory,
-            tooltip: 'مسح الذاكرة',
-            icon: const Icon(Icons.delete_sweep_outlined, color: Colors.white38, size: 20),
           ),
         ],
       ),
