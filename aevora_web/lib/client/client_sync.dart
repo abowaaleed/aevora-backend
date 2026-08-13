@@ -126,8 +126,8 @@ class SyncStore {
   static Future<void> _applyToLocal(Map<String, dynamic> data) async {
     try {
       final chat = data['chat_messages'];
-      if (chat is List && chat.isNotEmpty) {
-        await LocalDb.kvPut('chat_messages', chat);
+      if (chat is List) {
+        await _mergeChatMessages(chat);
       }
       final comp = data['companion'];
       if (comp is Map && comp.isNotEmpty) {
@@ -145,6 +145,13 @@ class SyncStore {
     } catch (_) {}
     try {
       onStateApplied?.call();
+    } catch (_) {}
+  }
+
+  static Future<void> _mergeChatMessages(List<dynamic> cloud) async {
+    try {
+      final raw = await LocalDb.kvGetValue('chat_messages');
+      await LocalDb.kvPut('chat_messages', mergeChatMessages(raw, cloud));
     } catch (_) {}
   }
 
@@ -278,7 +285,7 @@ class SyncStore {
   static void schedulePush() {
     if (!_active) return;
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 2000), () {
+    _debounce = Timer(const Duration(milliseconds: 800), () {
       unawaited(pushNow());
     });
   }
@@ -424,4 +431,44 @@ class SyncStore {
     }
     return '${h1.toRadixString(16)}${h2.toRadixString(16)}';
   }
+}
+
+/// دمج رسائل المحادثة القادمة من السحابة مع المحلية بدل استبدالها.
+///
+/// السبب: السحب (عند فتح التطبيق أو الدخول) قد يجلب نسخة أقدم من المحادثة
+/// من Firestore، فإذا استُبدل المحلي بها تُمسح رسالة كُتبت للتو ولم تُرفع
+/// بعد — خصوصاً عند فتح نفس الحساب على عدة أجهزة. الدمج يحفظ الرسائل
+/// المحلية الأحدث ويملأ الفراغات من السحابة فقط.
+List<Map<String, dynamic>> mergeChatMessages(
+    Object? localRaw, List<dynamic> cloud) {
+  final merged = <Map<String, dynamic>>[];
+  final seen = <String>{};
+
+  void add(Map<String, dynamic> m) {
+    final text = (m['text'] ?? '').toString();
+    if (text.trim().isEmpty) return;
+    final id = (m['id'] ?? '').toString().trim();
+    final role = (m['role'] ?? '').toString();
+    final key = id.isNotEmpty ? 'id:$id' : 'pair:$role|${m['text']}';
+    if (!seen.add(key)) return;
+    merged.add({
+      'id': id.isNotEmpty ? id : '${DateTime.now().microsecondsSinceEpoch}',
+      'role': role.isEmpty ? 'model' : role,
+      'text': text,
+    });
+  }
+
+  // المحلية أولاً (الجهاز الحالي هو المصدر الأحدث)، ثم رسائل السحابة
+  // غير الموجودة محلياً تُضاف كاملة — فلا تُمسح أي رسالة من أي جهاز.
+  for (final m in (localRaw is List ? localRaw : const []).whereType<Map>()) {
+    add(Map<String, dynamic>.from(m));
+  }
+  for (final m in cloud.whereType<Map>()) {
+    add(Map<String, dynamic>.from(m));
+  }
+
+  if (merged.length > 100) {
+    merged.removeRange(0, merged.length - 100);
+  }
+  return merged;
 }

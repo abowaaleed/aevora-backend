@@ -33,8 +33,9 @@ class _ChatMessage {
   final String id;
   String text;
   final bool isUser;
-  _ChatMessage(this.text, this.isUser)
-      : id = '${DateTime.now().microsecondsSinceEpoch}_${text.hashCode}';
+  _ChatMessage(this.text, this.isUser, {String? id})
+      : id = id ??
+            '${DateTime.now().microsecondsSinceEpoch}_${text.hashCode}';
 }
 
 class _ChatScreenState extends State<ChatScreen> {
@@ -72,8 +73,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (v is List && v.isNotEmpty) {
         final msgs = v
             .whereType<Map>()
-            .map((m) => _ChatMessage(
-                (m['text'] ?? '').toString(), m['role'] == 'user'))
+            .map((m) => _ChatMessage((m['text'] ?? '').toString(),
+                m['role'] == 'user', id: (m['id'] ?? '').toString()))
             .where((m) => m.text.trim().isNotEmpty)
             .toList();
         if (msgs.isNotEmpty && mounted) {
@@ -97,7 +98,8 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final list = _messages
           .where((m) => m.text.trim().isNotEmpty)
-          .map((m) => {'role': m.isUser ? 'user' : 'model', 'text': m.text})
+          .map((m) =>
+              {'id': m.id, 'role': m.isUser ? 'user' : 'model', 'text': m.text})
           .toList();
       if (list.length > 100) {
         list.removeRange(0, list.length - 100);
