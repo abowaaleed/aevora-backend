@@ -45,16 +45,19 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
     // عند أي تغيّر بالجلسة (دخول/خروج) وجّه تلقائياً بين شاشة الدخول والتطبيق.
     if (isAuthEnabled) {
       _authSub = authStateStream().listen((user) {
-        try {
-          final nav = _navigatorKey.currentState;
-          if (nav == null) return;
-          nav.pushNamedAndRemoveUntil(
-            user != null ? '/shell' : '/login',
-            (_) => false,
-          );
-        } catch (_) {
-          // فشل التوجيه لا يُسقط التطبيق.
-        }
+        // تأجيل التوجيه لما بعد انتهاء إطار البناء الحالي.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try {
+            final nav = _navigatorKey.currentState;
+            if (nav == null) return;
+            nav.pushNamedAndRemoveUntil(
+              user != null ? '/shell' : '/login',
+              (_) => false,
+            );
+          } catch (_) {
+            // فشل التوجيه لا يُسقط التطبيق.
+          }
+        });
       });
     }
   }

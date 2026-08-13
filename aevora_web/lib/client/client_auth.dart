@@ -21,6 +21,8 @@ Future<void> initFirebase() async {
   }
   // حفظ الجلسة محلياً (السلوك الافتراضي على الويب) ليظل المستخدم مسجلاً.
   await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+  // إكمال أي تسجيل دخول Redirect عالق من محاولة سابقة.
+  await getGoogleRedirectResult();
 }
 
 bool get isAuthEnabled => isFirebaseConfigured;
@@ -42,11 +44,32 @@ Stream<User?> authStateStream() {
 }
 
 /// تسجيل الدخول بحساب Google عبر نافذة منبثقة (يعمل من المتصفح مباشرة).
+/// عند فشل المنبثقة (حجب النوافذ مثلاً) استخدم [signInWithGoogleRedirect].
 Future<User?> signInWithGoogle() async {
   if (!isAuthEnabled) return null;
   final provider = GoogleAuthProvider();
   final cred = await FirebaseAuth.instance.signInWithPopup(provider);
   return cred.user;
+}
+
+/// تسجيل الدخول بنافذة إعادة توجيه كاملة (تعمل حتى مع حجب النوافذ المنبثقة).
+/// تعيد التوجيه إلى Google ثم تعود للموقع؛ أكمل النتيجة عبر
+/// [getGoogleRedirectResult] عند بدء التطبيق.
+Future<void> signInWithGoogleRedirect() async {
+  if (!isAuthEnabled) return;
+  final provider = GoogleAuthProvider();
+  await FirebaseAuth.instance.signInWithRedirect(provider);
+}
+
+/// إكمال تسجيل الدخول عبر Redirect بعد عودة المتصفح من Google.
+/// استدعِها عند بدء التطبيق للتعامل مع حالة الانتظار.
+Future<void> getGoogleRedirectResult() async {
+  if (!isAuthEnabled) return;
+  try {
+    await FirebaseAuth.instance.getRedirectResult();
+  } catch (_) {
+    // لا توجد نتيجة redirect (أو انتهت): سلوك طبيعي.
+  }
 }
 
 /// تسجيل الخروج (تبقى البيانات المحلية لكنها تتوقف عن المزامنة).
