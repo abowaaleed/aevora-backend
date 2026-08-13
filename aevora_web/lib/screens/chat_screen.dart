@@ -13,7 +13,6 @@ import '../client/client_sync.dart';
 import '../client/client_voice.dart';
 import '../config.dart';
 import '../widgets/export_sheet.dart';
-import '../widgets/plain_text_paste_dialog.dart';
 
 const _chatSystemPrompt = '''
 أنت «ايفورا» — مساعد ذكي يجيب بلغة المستخدم (العربية أو الإنجليزية).
@@ -255,16 +254,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _openPlainTextPaste() async {
-    final text = await showDialog<String>(
-      context: context,
-      builder: (_) => const PlainTextPasteDialog(),
-    );
-    if (text != null && text.isNotEmpty) {
-      await _send(text);
-    }
-  }
-
   void _addError(String msg) {
     if (!mounted) return;
     setState(() => _messages.add(_ChatMessage(msg, false)));
@@ -404,15 +393,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: _isLoading ? null : _openPlainTextPaste,
-            style: IconButton.styleFrom(
-              backgroundColor: const Color(0xFF2A2F45),
-            ),
-            icon: const Icon(Icons.content_paste_go_rounded, color: Colors.white),
-            tooltip: 'لصق نص من Word',
           ),
           const SizedBox(width: 8),
           IconButton.filled(

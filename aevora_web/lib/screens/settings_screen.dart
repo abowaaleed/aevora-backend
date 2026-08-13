@@ -1,8 +1,12 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../client/client_auth.dart';
+import '../client/client_rag.dart';
+import '../client/client_sync.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
+import 'document_screen.dart';
 import 'key_setup_screen.dart';
 import 'memory_screen.dart';
 
@@ -26,6 +30,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _clearing = false;
   bool _signingOut = false;
+  bool _uploading = false;
   Map<String, dynamic>? _usage;
   bool _usageLoading = false;
   String? _usageError;
@@ -78,6 +83,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // توجّه الواجهة إلى شاشة الدخول تلقائياً عبر مراقب الجلسة.
   }
 
+  /// رفع مستندات PDF / TXT من الإعدادات وفهرستها للبحث فيها.
+  Future<void> _pickAndIndex() async {
+    if (_uploading) return;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'txt'],
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final files = result.files.where((f) => f.bytes != null).toList();
+      if (files.isEmpty) {
+        throw Exception('لم يُقرأ أي ملف.');
+      }
+
+      if (!mounted) return;
+      setState(() => _uploading = true);
+
+      var failed = 0;
+      final total = files.length;
+      for (final f in files) {
+        try {
+          await indexLocalFile(f.name, f.bytes!);
+          // رفع الملف مع الحساب (إن كان مسجلاً) ليتوفر في أي جهاز آخر.
+          SyncStore.schedulePush();
+        } catch (_) {
+          failed++;
+        }
+        if (mounted) setState(() {});
+      }
+
+      if (mounted) {
+        setState(() => _uploading = false);
+        DocumentScreen.refreshTick.value++;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            failed == 0
+                ? 'تمت فهرسة $total ملفاً بنجاح.'
+                : 'تمت فهرسة ${total - failed} من $total ملفاً ($failed فشل).',
+          ),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _uploading = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('فشل الرفع: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -124,6 +181,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => MemoryScreen(keys: widget.keys)),
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            color: const Color(0xFF141A2A),
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: _uploading
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Color(0xFF81C784)),
+                    )
+                  : const Icon(Icons.upload_file, color: Color(0xFF81C784)),
+              title: Text(
+                _uploading ? 'جارٍ الفهرسة...' : 'رفع مستندات (PDF / TXT)',
+                style: const TextStyle(color: Colors.white),
+              ),
+              subtitle: const Text(
+                  'ارفع ملفاتك هنا لتصبح قابلة للبحث في المحادثة',
+                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_left, color: Colors.white38),
+              onTap: _uploading ? null : _pickAndIndex,
             ),
           ),
           const SizedBox(height: 24),

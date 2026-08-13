@@ -1,12 +1,13 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
-import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
 
 class DocumentScreen extends StatefulWidget {
+  /// إشارة لتحديث قائمة الملفات من أي مكان (مثل بعد رفع من الإعدادات).
+  static final ValueNotifier<int> refreshTick = ValueNotifier<int>(0);
+
   final KeySettings keys;
   const DocumentScreen({super.key, required this.keys});
 
@@ -25,12 +26,21 @@ class _DocumentScreenState extends State<DocumentScreen> {
   List<_DocItem> _files = [];
   bool _loading = true;
   String? _error;
-  bool _uploading = false;
-  String _uploadStatus = '';
 
   @override
   void initState() {
     super.initState();
+    DocumentScreen.refreshTick.addListener(_onRefreshTick);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    DocumentScreen.refreshTick.removeListener(_onRefreshTick);
+    super.dispose();
+  }
+
+  void _onRefreshTick() {
     _load();
   }
 
@@ -53,59 +63,6 @@ class _DocumentScreenState extends State<DocumentScreen> {
         _error = e.toString();
         _loading = false;
       });
-    }
-  }
-
-  Future<void> _pickAndIndex() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt'],
-      );
-      if (result == null || result.files.isEmpty) return;
-
-      final files = result.files.where((f) => f.bytes != null).toList();
-      if (files.isEmpty) {
-        throw Exception('لم يُقرأ أي ملف.');
-      }
-
-      setState(() {
-        _uploading = true;
-        _error = null;
-        _uploadStatus = '';
-      });
-
-      var done = 0;
-      final total = files.length;
-      for (final f in files) {
-        if (!mounted) return;
-        setState(() => _uploadStatus = 'جاري الفهرسة (${done + 1}/$total): ${f.name}');
-        try {
-          await indexLocalFile(f.name, f.bytes!);
-          // رفع الملف مع الحساب (إن كان مسجلاً) ليتوفر في أي جهاز آخر.
-          SyncStore.schedulePush();
-        } catch (e) {
-          setState(() => _error = 'فشل قراءة «${f.name}»: $e');
-          await Future.delayed(const Duration(seconds: 1));
-        }
-        done++;
-      }
-
-      if (mounted) {
-        setState(() {
-          _uploading = false;
-          _uploadStatus = done == total ? 'تمت فهرسة جميع الملفات' : 'اكتملت الفهرسة';
-        });
-      }
-      await _load();
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _uploading = false;
-          _error = 'فشل الرفع: $e';
-        });
-      }
     }
   }
 
@@ -190,49 +147,9 @@ class _DocumentScreenState extends State<DocumentScreen> {
             )
           : Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _uploading ? null : _pickAndIndex,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF4CAF50),
-                        ),
-                        icon: _uploading
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(Icons.upload_file),
-                        label: Text(
-                          _uploading ? 'فهرسة جارية...' : 'رفع مستندات (PDF / TXT)',
-                        ),
-                      ),
-                      if (_uploadStatus.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          child: Text(
-                            _uploadStatus,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Color(0xFF81C784), fontSize: 13),
-                          ),
-                        ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'تُقرأ الملفات وتُبحث محلياً داخل متصفحك — وعند تسجيل '
-                        'الدخول بحساب Google تُزامن مع حسابك لتعود في أي جهاز آخر.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white38, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
                 if (_error != null)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Text(
                       _error!,
                       style: const TextStyle(color: Colors.orangeAccent, fontSize: 13),
@@ -242,7 +159,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: _files.isEmpty
                       ? const Center(
                           child: Text(
-                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT لتبدأ البحث فيها.',
+                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT من «الإعدادات ← رفع مستندات».',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),
