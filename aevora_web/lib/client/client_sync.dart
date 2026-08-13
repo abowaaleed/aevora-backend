@@ -27,6 +27,10 @@ class SyncStore {
   static StreamSubscription<User?>? _sub;
   static Completer<void>? _ready;
   static bool _pushedAfterPull = false;
+  // تتبّع آخر حالة جلسة لرفع/سحب فقط عند دخول أو خروج حقيقي، وليس عند
+  // تجديد التوكن (يصدر حدثاً من نفس المستخدم) الذي قد يُسقط بيانات محلية
+  // غير مرفوعة بعد.
+  static String? _lastAuthUid;
 
   // حدود نقل الملفات عبر Firestore (مستند واحد ≤ 1MB).
   static const _maxSyncChunks = 400;
@@ -46,6 +50,9 @@ class SyncStore {
     _sub?.cancel();
     try {
       _sub = FirebaseAuth.instance.authStateChanges().listen((user) {
+        final uid = user?.uid;
+        if (uid == _lastAuthUid) return;
+        _lastAuthUid = uid;
         _user = user;
         if (user != null) {
           _pullThenReady(user.uid);
@@ -70,6 +77,8 @@ class SyncStore {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       _user = user;
+      // منع سحب مزدوج: أول حدث من authStateChanges لنفس المستخدم يُتجاهل.
+      _lastAuthUid = user.uid;
       _pullThenReady(user.uid);
     }
   }

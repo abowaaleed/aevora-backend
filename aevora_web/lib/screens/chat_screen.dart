@@ -130,6 +130,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _input.clear();
     });
     _scrollToBottom();
+    // حفظ فوري لرسالة المستخدم لحظة الإرسال حتى لا تختفي أبداً عند أي
+    // إعادة إنشاء للشاشة (تحديث جلسة/توجيه).
+    await _persistMessages();
 
     final assistant = _ChatMessage('', false);
     setState(() => _messages.add(assistant));

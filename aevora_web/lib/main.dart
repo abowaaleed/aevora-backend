@@ -38,6 +38,10 @@ class AevoraWebApp extends StatefulWidget {
 class _AevoraWebAppState extends State<AevoraWebApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<User?>? _authSub;
+  // تتبّع حالة الجلسة الأخيرة: نوجّه فقط عند تغيُّر حقيقي (دخول/خروج) ونتجاهل
+  // أحداث تجديد التوكن التي تصدر من نفس المستخدم، حتى لا تُعاد شاشة التطبيق
+  // من جديد وتفقد الرسائل غير المحفوظة.
+  String? _lastAuthUid;
 
   @override
   void initState() {
@@ -45,6 +49,9 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
     // عند أي تغيّر بالجلسة (دخول/خروج) وجّه تلقائياً بين شاشة الدخول والتطبيق.
     if (isAuthEnabled) {
       _authSub = authStateStream().listen((user) {
+        final uid = user?.uid;
+        if (uid == _lastAuthUid) return;
+        _lastAuthUid = uid;
         // تأجيل التوجيه لما بعد انتهاء إطار البناء الحالي.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try {
