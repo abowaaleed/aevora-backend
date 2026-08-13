@@ -7,6 +7,7 @@ import '../client/client_export.dart';
 import '../client/client_llm.dart';
 import '../client/client_rag.dart';
 import '../client/client_storage.dart';
+import '../client/client_sync.dart';
 import '../client/client_voice.dart';
 import '../config.dart';
 import '../widgets/export_sheet.dart';
@@ -100,6 +101,7 @@ class _ChatScreenState extends State<ChatScreen> {
         list.removeRange(0, list.length - 100);
       }
       await LocalDb.kvPut('chat_messages', list);
+      SyncStore.schedulePush();
     } catch (_) {}
   }
 

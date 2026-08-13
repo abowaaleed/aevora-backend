@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'client_llm.dart';
 import 'client_storage.dart';
+import 'client_sync.dart';
 import 'client_usage.dart';
 
 /// ذاكرة المساعد الشخصي: تعمل بالكامل داخل المتصفح.
@@ -62,6 +63,36 @@ class LocalCompanion {
   static Future<void> _saveMessages(List<Map<String, dynamic>> m) =>
       LocalDb.kvPut(_kMessages, m);
 
+  // ---------- تصدير/استيراد الحالة (للمزامنة مع الحساب) ----------
+
+  /// لقطة كاملة لحالة المساعد تُرفع إلى السحابة مع الحساب.
+  static Future<Map<String, dynamic>> exportState() async {
+    return {
+      'profile': await _getProfile(),
+      'memories': await _memories(),
+      'tasks': await _tasks(),
+      'messages': await _messages(),
+      'summary': (await LocalDb.kvGetValue(_kSummary) ?? '').toString(),
+    };
+  }
+
+  /// تطبيق حالة قادمة من الحساب (عند تسجيل الدخول على جهاز جديد).
+  /// لا تُنبّه للمزامنة هنا لتفادي حلقة رفع عند السحب.
+  static Future<void> importState(Map<String, dynamic> state) async {
+    final profile = state['profile'];
+    if (profile is Map) await LocalDb.kvPut(_kProfile, profile);
+    final memories = state['memories'];
+    if (memories is List) await LocalDb.kvPut(_kMemories, memories);
+    final tasks = state['tasks'];
+    if (tasks is List) await LocalDb.kvPut(_kTasks, tasks);
+    final messages = state['messages'];
+    if (messages is List) await LocalDb.kvPut(_kMessages, messages);
+    final summary = state['summary'];
+    if (summary != null) {
+      await LocalDb.kvPut(_kSummary, summary.toString());
+    }
+  }
+
   // ---------- الحالة ----------
   static Future<Map<String, dynamic>> loadState() async {
     final profile = await _getProfile();
@@ -117,6 +148,7 @@ class LocalCompanion {
     stats['total_messages'] = all.length;
     profile['learning_stats'] = stats;
     await _saveProfile(profile);
+    SyncStore.schedulePush();
 
     LocalUsage.recordCompanion();
     unawaited(_analyze(apiKey, message, reply));
@@ -278,6 +310,7 @@ class LocalCompanion {
       }
     }
     await _saveProfile(profile);
+    SyncStore.schedulePush();
   }
 
   // ---------- المهام ----------
@@ -290,6 +323,7 @@ class LocalCompanion {
       'completed': false,
     });
     await LocalDb.kvPut(_kTasks, tasks);
+    SyncStore.schedulePush();
   }
 
   static Future<void> toggleTask(String id) async {
@@ -300,12 +334,14 @@ class LocalCompanion {
       }
     }
     await LocalDb.kvPut(_kTasks, tasks);
+    SyncStore.schedulePush();
   }
 
   static Future<void> deleteTask(String id) async {
     final tasks = await _tasks();
     tasks.removeWhere((t) => t['id'] == id);
     await LocalDb.kvPut(_kTasks, tasks);
+    SyncStore.schedulePush();
   }
 
   static Future<void> reset() async {
@@ -316,6 +352,7 @@ class LocalCompanion {
     await LocalDb.kvDelete(_kSummary);
     await LocalDb.kvDelete(_kProactive);
     await LocalDb.kvDelete(_kProactiveDate);
+    SyncStore.schedulePush();
   }
 
   // ---------- المبادرة اليومية ----------
@@ -350,6 +387,7 @@ class LocalCompanion {
           'message': json['message'],
           'prompt': json['prompt'],
         });
+        SyncStore.schedulePush();
       }
     } catch (_) {}
   }
@@ -357,6 +395,7 @@ class LocalCompanion {
   static Future<void> acknowledgeProactive() async {
     await LocalDb.kvDelete(_kProactive);
     await LocalDb.kvPut(_kProactiveDate, _date());
+    SyncStore.schedulePush();
   }
 }
 

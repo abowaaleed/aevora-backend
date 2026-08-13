@@ -1,23 +1,72 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'client/client_auth.dart';
+import 'client/client_sync.dart';
 import 'config.dart';
 import 'screens/key_setup_screen.dart';
+import 'screens/login_screen.dart';
 import 'screens/shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final keys = await AppStorage.load();
+  await initFirebase();
+  if (isAuthEnabled) {
+    // سحب بيانات الحساب قبل عرض الواجهة، ثم ربط تغيّرات الجلسة.
+    await SyncStore.prepare();
+    SyncStore.startListening();
+    await SyncStore.waitForReady();
+  }
   runApp(AevoraWebApp(keys: keys));
 }
 
-class AevoraWebApp extends StatelessWidget {
+class AevoraWebApp extends StatefulWidget {
   final KeySettings keys;
   const AevoraWebApp({super.key, required this.keys});
+
+  @override
+  State<AevoraWebApp> createState() => _AevoraWebAppState();
+}
+
+class _AevoraWebAppState extends State<AevoraWebApp> {
+  final _navigatorKey = GlobalKey<NavigatorState>();
+  StreamSubscription<User?>? _authSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // عند أي تغيّر بالجلسة (دخول/خروج) وجّه تلقائياً بين شاشة الدخول والتطبيق.
+    if (isAuthEnabled) {
+      _authSub = authStateStream().listen((user) {
+        final nav = _navigatorKey.currentState;
+        if (nav == null) return;
+        nav.pushNamedAndRemoveUntil(
+          user != null ? '/shell' : '/login',
+          (_) => false,
+        );
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  String get _initialRoute {
+    if (isAuthEnabled) return isSignedIn ? '/shell' : '/login';
+    return widget.keys.hasKeys ? '/shell' : '/setup';
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: appName,
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         colorScheme: ColorScheme.dark(
@@ -33,8 +82,9 @@ class AevoraWebApp extends StatelessWidget {
         ),
         cardColor: const Color(0xFF141A2A),
       ),
-      initialRoute: keys.hasKeys ? '/shell' : '/setup',
+      initialRoute: _initialRoute,
       routes: {
+        '/login': (_) => const LoginScreen(),
         '/setup': (_) => const KeySetupScreen(),
         '/shell': (_) => const Shell(),
       },

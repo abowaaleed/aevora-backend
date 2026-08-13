@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../client/client_auth.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
 import 'key_setup_screen.dart';
@@ -9,11 +10,13 @@ class SettingsScreen extends StatefulWidget {
   final KeySettings keys;
   final ValueChanged<KeySettings> onKeysChanged;
   final VoidCallback onLogout;
+  final Future<void> Function() onAccountSignOut;
   const SettingsScreen({
     super.key,
     required this.keys,
     required this.onKeysChanged,
     required this.onLogout,
+    required this.onAccountSignOut,
   });
 
   @override
@@ -22,6 +25,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _clearing = false;
+  bool _signingOut = false;
   Map<String, dynamic>? _usage;
   bool _usageLoading = false;
   String? _usageError;
@@ -67,6 +71,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return '${key.substring(0, 4)}••••••${key.substring(key.length - 4)}';
   }
 
+  Future<void> _signOutAccount() async {
+    if (_signingOut) return;
+    setState(() => _signingOut = true);
+    await widget.onAccountSignOut();
+    // توجّه الواجهة إلى شاشة الدخول تلقائياً عبر مراقب الجلسة.
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -75,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (isAuthEnabled) ..._accountSection(),
           const Text('مفاتيحك الخاصة',
               style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
           const SizedBox(height: 8),
@@ -154,6 +166,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  /// قسم الحساب والمزامنة: يظهر عندما يكون Firebase مفعّلاً.
+  List<Widget> _accountSection() {
+    final signedIn = isSignedIn;
+    final email = currentEmail;
+    final name = currentDisplayName;
+    return [
+      const Text('الحساب والمزامنة',
+          style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+      const SizedBox(height: 8),
+      Card(
+        color: const Color(0xFF141A2A),
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!signedIn) ...[
+                const Row(
+                  children: [
+                    Icon(Icons.cloud_off, color: Colors.white54, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'غير مسجل الدخول — بياناتك محفوظة على هذا الجهاز فقط.',
+                        style: TextStyle(color: Colors.white54, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/login', (_) => false),
+                    icon: const Icon(Icons.login),
+                    label: const Text('تسجيل الدخول بحساب Google'),
+                  ),
+                ),
+              ] else ...[
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundColor: const Color(0xFF1D3A1D),
+                      child: Text(
+                        (name != null && name.isNotEmpty)
+                            ? name[0].toUpperCase()
+                            : (email?.isNotEmpty ?? false)
+                                ? email![0].toUpperCase()
+                                : '?',
+                        style: const TextStyle(
+                            color: Color(0xFF4CAF50),
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            (name != null && name.isNotEmpty) ? name : 'حساب Google',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600),
+                          ),
+                          if (email != null && email.isNotEmpty)
+                            Text(
+                              email,
+                              style: const TextStyle(
+                                  color: Colors.white54, fontSize: 12),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Row(
+                  children: [
+                    Icon(Icons.sync_rounded, color: Color(0xFF81C784), size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'المزامنة نشطة: محادثاتك ومهامك وعدّاداتك تتبعك على أي '
+                        'متصفح أو هاتف.',
+                        style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.5),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _signingOut ? null : _signOutAccount,
+                    icon: const Icon(Icons.logout),
+                    label: Text(_signingOut
+                        ? 'جارٍ تسجيل الخروج...'
+                        : 'تسجيل الخروج من الحساب'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 24),
+    ];
   }
 
   Widget _usageCard() {

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../client/client_auth.dart';
+import '../client/client_sync.dart';
 import '../config.dart';
 import 'chat_screen.dart';
 import 'companion_screen.dart';
@@ -36,6 +38,13 @@ class _ShellState extends State<Shell> {
     Navigator.of(context).pushNamedAndRemoveUntil('/setup', (_) => false);
   }
 
+  /// رفع أي تعديل معلّق ثم تسجيل الخروج من الحساب (توجّه الواجهة تلقائياً
+  /// عبر مراقب الجلسة في main.dart).
+  Future<void> _signOutAccount() async {
+    await SyncStore.pushNow();
+    await signOut();
+  }
+
   @override
   Widget build(BuildContext context) {
     final screens = [
@@ -46,6 +55,7 @@ class _ShellState extends State<Shell> {
         keys: _keys,
         onKeysChanged: (k) => setState(() => _keys = k),
         onLogout: _logout,
+        onAccountSignOut: _signOutAccount,
       ),
     ];
     return Scaffold(

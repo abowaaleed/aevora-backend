@@ -1,10 +1,12 @@
 import 'client_storage.dart';
+import 'client_sync.dart';
 
-/// عدّادات الاستهلاك اليومية المحلية.
-/// تُحفظ في IndexedDB بمفتاح تاريخ اليوم، فتبقى ثابتة بعد إغلاق المتصفح
-/// وتتصفّر تلقائياً عند تغيّر اليوم.
+/// عدّادات الاستهلاك اليومية المرتبطة بالمستخدم.
+///
+/// تُحفظ في IndexedDB كتاريخ يومي (`usage_history`) فلا تتصفّر عند تغيّر اليوم،
+/// وتُرفع إلى Firestore مع الحساب لتبقى ملازمة للمستخدم في أي متصفح/هاتف.
 class LocalUsage {
-  static const _key = 'usage_today';
+  static const _key = 'usage_history';
   static const geminiLimit = 1500;
   static const groqLimit = 1000;
   static const whisperLimit = 2000;
@@ -16,27 +18,32 @@ class LocalUsage {
     return '${now.year}-$m-$d';
   }
 
-  static Future<Map<String, dynamic>> _read() async {
-    final row = await LocalDb.kvGetValue(_key);
-    if (row is Map) return Map<String, dynamic>.from(row);
-    return {'date': _today(), 'gemini': 0, 'groq': 0, 'whisper': 0, 'companion': 0};
+  /// سجل كامل: { '2026-08-13': {gemini: n, groq: n, whisper: n, companion: n} }.
+  static Future<Map<String, dynamic>> history() async {
+    final v = await LocalDb.kvGetValue(_key);
+    if (v is Map) return Map<String, dynamic>.from(v);
+    return {};
   }
 
-  static Future<void> _write(Map<String, dynamic> data) async {
-    data['date'] = _today();
-    await LocalDb.kvPut(_key, data);
+  static Future<Map<String, dynamic>> _day(String date) async {
+    final h = await history();
+    final d = h[date];
+    if (d is Map) return Map<String, dynamic>.from(d);
+    return {'gemini': 0, 'groq': 0, 'whisper': 0, 'companion': 0};
   }
 
-  static Future<Map<String, dynamic>> _bump(String field) async {
-    final data = await _read();
-    if (data['date'] != _today()) {
-      data
-        ..clear()
-        ..['date'] = _today();
-    }
-    data[field] = ((data[field] as num?) ?? 0) + 1;
-    await _write(data);
-    return data;
+  static Future<void> _writeDay(String date, Map<String, dynamic> day) async {
+    final h = await history();
+    h[date] = day;
+    await LocalDb.kvPut(_key, h);
+    SyncStore.schedulePush();
+  }
+
+  static Future<void> _bump(String field) async {
+    final date = _today();
+    final day = await _day(date);
+    day[field] = ((day[field] as num?) ?? 0) + 1;
+    await _writeDay(date, day);
   }
 
   static Future<void> recordGemini() => _bump('gemini');
@@ -44,32 +51,55 @@ class LocalUsage {
   static Future<void> recordWhisper() => _bump('whisper');
   static Future<void> recordCompanion() => _bump('companion');
 
+  /// حالة اليوم الحالي بصيغة العرض (used/limit/remaining).
   static Future<Map<String, dynamic>> today() async {
-    final data = await _read();
-    if (data['date'] != _today()) {
-      data
-        ..clear()
-        ..['date'] = _today();
-      await _write(data);
-    }
+    final date = _today();
+    final day = await _day(date);
+    final gemini = (day['gemini'] as num?)?.toInt() ?? 0;
+    final groq = (day['groq'] as num?)?.toInt() ?? 0;
+    final whisper = (day['whisper'] as num?)?.toInt() ?? 0;
     return {
-      'date': data['date'],
+      'date': date,
       'gemini': {
-        'used': data['gemini'] ?? 0,
+        'used': gemini,
         'limit': geminiLimit,
-        'remaining': geminiLimit - (data['gemini'] ?? 0),
+        'remaining': geminiLimit - gemini,
       },
       'groq': {
-        'used': data['groq'] ?? 0,
+        'used': groq,
         'limit': groqLimit,
-        'remaining': groqLimit - (data['groq'] ?? 0),
+        'remaining': groqLimit - groq,
       },
       'stt_groq': {
-        'used': data['whisper'] ?? 0,
+        'used': whisper,
         'limit': whisperLimit,
-        'remaining': whisperLimit - (data['whisper'] ?? 0),
+        'remaining': whisperLimit - whisper,
       },
-      'companion': data['companion'] ?? 0,
+      'companion': (day['companion'] as num?)?.toInt() ?? 0,
     };
+  }
+
+  /// دمج سجل قادم من السحابة مع المحلي (الأعلى لكل يوم/حقل يربح)
+  /// حتى لا تُفقد العدادات عند استخدام أكثر من جهاز في نفس اليوم.
+  static Future<void> mergeHistory(Map<String, dynamic> cloud) async {
+    final local = await history();
+    for (final e in cloud.entries) {
+      final cd = e.value;
+      if (cd is! Map) continue;
+      final cm = Map<String, dynamic>.from(cd);
+      final ld = local[e.key];
+      if (ld is Map) {
+        final merged = Map<String, dynamic>.from(ld);
+        for (final fe in cm.entries) {
+          final cv = fe.value is num ? (fe.value as num).toInt() : 0;
+          final lv = (merged[fe.key] as num?)?.toInt() ?? 0;
+          merged[fe.key] = cv > lv ? cv : lv;
+        }
+        local[e.key] = merged;
+      } else {
+        local[e.key] = cm;
+      }
+    }
+    await LocalDb.kvPut(_key, local);
   }
 }
