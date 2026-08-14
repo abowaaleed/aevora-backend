@@ -143,10 +143,42 @@ Future<String> geminiChatSync({
 }
 
 String _extractError(String body, int status) {
+  var raw = '';
   try {
     final obj = jsonDecode(body);
-    final msg = obj['error']?['message']?.toString();
-    if (msg != null && msg.isNotEmpty) return msg;
+    raw = obj['error']?['message']?.toString() ?? '';
   } catch (_) {}
+  final r = raw.toLowerCase();
+
+  // رسالة Google عن الازدحام المؤقت للنموذج: خطأ 429 لكنه غير متعلق
+  // بالحصة اليومية — يزول من تلقاء نفسه خلال دقائق.
+  if (status == 429 && r.contains('high demand')) {
+    return 'خدمة Gemini مزدحمة حالياً (ازدحام مؤقت). انتظر دقيقة وأعد المحاولة — '
+        'ليس هذا نفاداً لحصتك اليومية.';
+  }
+  if (status == 429 &&
+      (r.contains('rate limit') ||
+          r.contains('too many requests') ||
+          r.contains('requests per minute') ||
+          r.contains('rpm'))) {
+    return 'تجاوزت حد الطلبات في الدقيقة (حوالي ${LocalUsage.geminiRpm} طلبات/دقيقة). '
+        'انتظر دقيقة وأعد المحاولة.';
+  }
+  if (status == 429 &&
+      (r.contains('requests per day') ||
+          r.contains('daily') ||
+          r.contains('quota') ||
+          r.contains('resource has been exhausted'))) {
+    return 'استُنفدت حصة محادثات Gemini اليوم (1,500 طلب). تُعاد الحصة تلقائياً '
+        'عند منتصف الليل بتوقيت المحيط الهادئ.';
+  }
+  if (status == 429) {
+    return 'وصلت حداً من حدود Gemini (429). انتظر دقيقة وأعد المحاولة.';
+  }
+  if ((status == 400 || status == 403) &&
+      (r.contains('api key') || r.contains('invalid') || r.contains('unauthorized'))) {
+    return 'مفتاح Gemini غير صالح أو محذوف. حدّثه من الإعدادات.';
+  }
+  if (raw.isNotEmpty) return raw;
   return 'فشل الاتصال بـ Gemini ($status)';
 }

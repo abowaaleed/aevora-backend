@@ -62,7 +62,7 @@ Future<Uint8List> geminiTextToSpeech({
 
   if (res.statusCode != 200) {
     throw Exception(
-        'النطق الاحترافي فشل (${res.statusCode}): ${_sttError(utf8.decode(res.bodyBytes))}');
+        'النطق الاحترافي فشل (${res.statusCode}): ${_sttError(utf8.decode(res.bodyBytes), res.statusCode)}');
   }
   final obj = jsonDecode(utf8.decode(res.bodyBytes));
   final parts =
@@ -380,7 +380,7 @@ Future<void> _streamTtsChunks({
   final res = await req.send().timeout(const Duration(seconds: 60));
   if (res.statusCode != 200) {
     throw Exception('النطق الاحترافي فشل (${res.statusCode}): '
-        '${_sttError(await res.stream.bytesToString())}');
+        '${_sttError(await res.stream.bytesToString(), res.statusCode)}');
   }
 
   var pending = '';
@@ -469,14 +469,25 @@ Future<void> speakSmart(
   await speakText(text, rate: rate, onStart: onStart);
 }
 
-/// ترجمة سبب فشل النطق الاحترافي إلى رسالة واضحة للمستخدم.
+/// ترجمة سبب فشل النطق الاحترافي إلى رسالة واضحة للمستخدم — يميّز
+/// الازدحام المؤقت (يُعاد قريباً) عن نفاد الحصة اليومية (يعود غداً).
 String _friendlyTtsFallbackReason(String raw) {
   final r = raw.toLowerCase();
+  if (r.contains('high demand')) {
+    return 'خدمة النطق الاحترافي مزدحمة حالياً — يُستخدم صوت المتصفح مؤقتاً، '
+        'وأعد المحاولة بعد قليل.';
+  }
+  if (r.contains('429') &&
+      (r.contains('rate limit') || r.contains('too many requests'))) {
+    return 'تجاوزت حد النطق الاحترافي في الدقيقة — يُستخدم صوت المتصفح مؤقتاً، '
+        'وانتظر دقيقة قبل إعادة المحاولة.';
+  }
   if (r.contains('429') ||
       r.contains('quota') ||
       r.contains('resource has been exhausted') ||
       r.contains('rate limit')) {
-    return 'استُنفدت حصة النطق الاحترافي اليوم، يُستخدم الآن صوت المتصفح الأساسي. سيعود الصوت الطبيعي غداً.';
+    return 'استُنفدت حصة النطق الاحترافي اليوم، يُستخدم الآن صوت المتصفح الأساسي. '
+        'سيعود الصوت الطبيعي غداً.';
   }
   if (r.contains('التشغيل التلقائي')) {
     return 'منع المتصفح النطق الاحترافي (سياسة التشغيل التلقائي)، يُستخدم صوت المتصفح الأساسي.';
@@ -608,7 +619,7 @@ Future<String> groqTranscribe({
   final res = await req.send().timeout(const Duration(minutes: 2));
   final body = await res.stream.bytesToString();
   if (res.statusCode != 200) {
-    throw Exception('التعرف على الصوت فشل (${res.statusCode}): ${_sttError(body)}');
+    throw Exception('التعرف على الصوت فشل (${res.statusCode}): ${_sttError(body, res.statusCode)}');
   }
   final text = (jsonDecode(body)['text'] ?? '').toString().trim();
   if (text.isEmpty) {
@@ -618,13 +629,29 @@ Future<String> groqTranscribe({
   return text;
 }
 
-String _sttError(String body) {
+/// ترجمة خطأ مزود الخدمة (Gemini TTS أو Groq Whisper) إلى رسالة عربية
+/// قابلة للفهم — خاصة أخطاء 429 الشائعة التي تُربك المستخدم.
+String _sttError(String body, int status) {
+  var raw = '';
   try {
     final obj = jsonDecode(body);
-    return obj['error']?['message']?.toString() ?? body;
-  } catch (_) {
-    return body;
+    raw = obj['error']?['message']?.toString() ?? '';
+  } catch (_) {}
+  final r = raw.toLowerCase();
+  if (status == 429) {
+    if (r.contains('high demand')) {
+      return 'الخدمة مزدحمة حالياً (ازدحام مؤقت) — أعد المحاولة بعد قليل.';
+    }
+    if (r.contains('daily') || r.contains('quota') || r.contains('resource has been exhausted')) {
+      return 'استُنفدت حصة هذا النوع اليوم — تعود تلقائياً عند منتصف الليل.';
+    }
+    return 'تجاوزت حد الطلبات في الدقيقة — انتظر دقيقة وأعد المحاولة.';
   }
+  if (status == 401 && (r.contains('api key') || r.contains('invalid'))) {
+    return 'مفتاح غير صالح — حدّثه من الإعدادات.';
+  }
+  if (raw.isNotEmpty) return raw;
+  return body;
 }
 
 // ---------- التحكم العالمي بصوت ايفورا (شريط التحكم بالصوت) ----------

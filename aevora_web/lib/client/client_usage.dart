@@ -7,9 +7,15 @@ import 'client_sync.dart';
 /// وتُرفع إلى Firestore مع الحساب لتبقى ملازمة للمستخدم في أي متصفح/هاتف.
 class LocalUsage {
   static const _key = 'usage_history';
+
+  /// الحدود الرسمية للطبقة المجانية (معلومة للعرض فقط) — لا تمثل عدّاداً
+  /// محلياً دقيقاً: الحدود الفعلية يفرضها المزود لكل مشروع وقد تتغير.
+  /// Gemini Flash: ~10 طلبات/دقيقة و1,500/يوم (تُعاد عند منتصف الليل PT).
+  /// Groq Whisper: ~20 طلباً/دقيقة و2,000/يوم.
   static const geminiLimit = 1500;
-  static const groqLimit = 1000;
+  static const geminiRpm = 10;
   static const whisperLimit = 2000;
+  static const whisperRpm = 20;
 
   static String _today() {
     final now = DateTime.now();
@@ -18,7 +24,7 @@ class LocalUsage {
     return '${now.year}-$m-$d';
   }
 
-  /// سجل كامل: { '2026-08-13': {gemini: n, groq: n, whisper: n, companion: n} }.
+  /// سجل كامل: { '2026-08-13': {gemini: n, whisper: n, companion: n} }.
   static Future<Map<String, dynamic>> history() async {
     final v = await LocalDb.kvGetValue(_key);
     if (v is Map) return Map<String, dynamic>.from(v);
@@ -29,7 +35,7 @@ class LocalUsage {
     final h = await history();
     final d = h[date];
     if (d is Map) return Map<String, dynamic>.from(d);
-    return {'gemini': 0, 'groq': 0, 'whisper': 0, 'companion': 0};
+    return {'gemini': 0, 'whisper': 0, 'companion': 0};
   }
 
   static Future<void> _writeDay(String date, Map<String, dynamic> day) async {
@@ -47,7 +53,6 @@ class LocalUsage {
   }
 
   static Future<void> recordGemini() => _bump('gemini');
-  static Future<void> recordGroq() => _bump('groq');
   static Future<void> recordWhisper() => _bump('whisper');
   static Future<void> recordCompanion() => _bump('companion');
 
@@ -63,12 +68,13 @@ class LocalUsage {
     await _writeDay(date, day);
   }
 
-  /// حالة اليوم الحالي بصيغة العرض (used/limit/remaining).
+  /// حالة اليوم الحالي بصيغة العرض (used/limit/remaining) مع معلومات
+  /// الحدود الرسمية للعرض فقط (rpm) — ليطلع المستخدم على سبب أخطاء
+  /// 429 التي قد تظهر رغم عدم بلوغ العدّاد اليومي.
   static Future<Map<String, dynamic>> today() async {
     final date = _today();
     final day = await _day(date);
     final gemini = (day['gemini'] as num?)?.toInt() ?? 0;
-    final groq = (day['groq'] as num?)?.toInt() ?? 0;
     final whisper = (day['whisper'] as num?)?.toInt() ?? 0;
     return {
       'date': date,
@@ -76,16 +82,13 @@ class LocalUsage {
         'used': gemini,
         'limit': geminiLimit,
         'remaining': geminiLimit - gemini,
-      },
-      'groq': {
-        'used': groq,
-        'limit': groqLimit,
-        'remaining': groqLimit - groq,
+        'rpm': geminiRpm,
       },
       'stt_groq': {
         'used': whisper,
         'limit': whisperLimit,
         'remaining': whisperLimit - whisper,
+        'rpm': whisperRpm,
       },
       'tts': {
         'requests': (day['tts'] as num?)?.toInt() ?? 0,

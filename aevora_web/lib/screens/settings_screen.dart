@@ -413,12 +413,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-          _usageRow('chat', 'Gemini', u['gemini'] as Map<String, dynamic>?),
+          _usageRow('chat', 'محادثة ايفورا (Gemini)',
+              u['gemini'] as Map<String, dynamic>?),
             const SizedBox(height: 14),
-            _usageRow('chat', 'Groq', u['groq'] as Map<String, dynamic>?),
-            const SizedBox(height: 14),
-            _usageRow('mic', 'التعرف على الصوت (Groq Whisper)',
-                u['stt_groq'] as Map<String, dynamic>?, isStt: true),
+            _usageRow('mic', 'التعرف على الصوت (Whisper عبر Groq)',
+                u['stt_groq'] as Map<String, dynamic>?),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -438,8 +437,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'الصوت الاحترافي من Gemini TTS بمفتاحك، وله حصة يومية مستقلة؛ '
-              'عند استنفادها يتحول النطق تلقائياً لصوت المتصفح.',
+              'الصوت الاحترافي من Gemini TTS (نموذج تجريبي بحدود يومية أضيق من '
+              'المحادثة) بمفتاحك؛ عند استنفادها يتحول النطق تلقائياً لصوت المتصفح.',
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
             ),
             const SizedBox(height: 12),
@@ -452,6 +451,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'هذه عدّادات تقريبية على جهازك ولا تعكس بالضرورة حصة المزود الفعلية '
+              'التي تفرضها Google/Groq وقد تتغير. الطلبات تُحسب يومياً على كل من '
+              '«في الدقيقة» (RPM) و«في اليوم» (RPD): فخطأ الازدحام المؤقت «high '
+              'demand» من Gemini يظهر رغم بقاء الحصة اليومية ولا يعني نفادها — '
+              'انتظر دقيقة وأعد المحاولة.',
+              style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.6),
             ),
             const SizedBox(height: 8),
             Align(
@@ -468,11 +476,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _usageRow(String iconKind, String label, Map<String, dynamic>? data,
-      {bool isStt = false}) {
+  Widget _usageRow(String iconKind, String label, Map<String, dynamic>? data) {
     final used = (data?['used'] as num?)?.toInt() ?? 0;
     final limit = (data?['limit'] as num?)?.toInt() ?? 0;
     final remaining = (data?['remaining'] as num?)?.toInt() ?? 0;
+    final rpm = (data?['rpm'] as num?)?.toInt() ?? 0;
     final ratio = limit > 0 ? used / limit : 0.0;
     final color = ratio >= 0.9
         ? Colors.redAccent
@@ -506,8 +514,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         const SizedBox(height: 4),
-        Text(isStt ? '' : 'المتبقي اليوم: $remaining',
-            style: TextStyle(color: Colors.white38, fontSize: 11)),
+        Text(
+          rpm > 0 ? 'حتى $rpm طلبات/دقيقة · المتبقي اليوم: $remaining' : '',
+          style: TextStyle(color: Colors.white38, fontSize: 11),
+        ),
       ],
     );
   }
