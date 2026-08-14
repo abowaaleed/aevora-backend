@@ -6,9 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../client/client_auth.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
-import 'chat_screen.dart';
-import 'companion_screen.dart';
-import 'document_screen.dart';
+import '../widgets/voice_control_bar.dart';
+import 'assistant_screen.dart';
 import 'settings_screen.dart';
 
 class Shell extends StatefulWidget {
@@ -65,9 +64,7 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      ChatScreen(keys: _keys),
-      DocumentScreen(keys: _keys),
-      CompanionScreen(keys: _keys),
+      AssistantScreen(keys: _keys),
       SettingsScreen(
         keys: _keys,
         onKeysChanged: (k) => setState(() => _keys = k),
@@ -76,7 +73,16 @@ class _ShellState extends State<Shell> {
       ),
     ];
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: screens),
+      body: Column(
+        children: [
+          Expanded(
+            child: IndexedStack(index: _currentIndex, children: screens),
+          ),
+          // شريط التحكم بصوت ايفورا: يظهر فوق شريط التنقل أثناء التشغيل
+          // على أي تبويب (المساعد أو الإعدادات).
+          const VoiceControlBar(),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         backgroundColor: const Color(0xFF0D1422),
         indicatorColor: const Color(0xFF1D3A1D),
@@ -84,18 +90,8 @@ class _ShellState extends State<Shell> {
         onDestinationSelected: (index) => setState(() => _currentIndex = index),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline_rounded),
-            selectedIcon: Icon(Icons.chat_bubble_rounded),
-            label: 'سؤال',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.folder_shared_outlined),
-            selectedIcon: Icon(Icons.folder_shared),
-            label: 'المستندات',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.psychology_alt_outlined),
-            selectedIcon: Icon(Icons.psychology_alt_rounded),
+            icon: Icon(Icons.auto_awesome_rounded),
+            selectedIcon: Icon(Icons.auto_awesome_rounded),
             label: 'المساعد',
           ),
           NavigationDestination(

@@ -1,5 +1,7 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
@@ -25,6 +27,7 @@ class _DocItem {
 class _DocumentScreenState extends State<DocumentScreen> {
   List<_DocItem> _files = [];
   bool _loading = true;
+  bool _uploading = false;
   String? _error;
 
   @override
@@ -63,6 +66,60 @@ class _DocumentScreenState extends State<DocumentScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  /// رفع ملفات PDF / TXT وفهرستها محلياً لتصبح قابلة للبحث في المحادثة.
+  Future<void> _pickAndUpload() async {
+    if (_uploading) return;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'txt'],
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final files = result.files.where((f) => f.bytes != null).toList();
+      if (files.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('لم يُقرأ أي ملف.')),
+          );
+        }
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() => _uploading = true);
+
+      var failed = 0;
+      for (final f in files) {
+        try {
+          await indexLocalFile(f.name, f.bytes!);
+          SyncStore.schedulePush();
+        } catch (_) {
+          failed++;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      DocumentScreen.refreshTick.value++;
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          failed == 0
+              ? 'تمت فهرسة ${files.length} ملفاً بنجاح.'
+              : 'تمت فهرسة ${files.length - failed} من ${files.length} ملفاً ($failed فشل).',
+        ),
+      ));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _uploading = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('فشل الرفع: $e')));
+      }
     }
   }
 
@@ -159,7 +216,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: _files.isEmpty
                       ? const Center(
                           child: Text(
-                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT من «الإعدادات ← رفع مستندات».',
+                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT من زر «رفع ملف» بالأسفل.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),
@@ -204,6 +261,14 @@ class _DocumentScreenState extends State<DocumentScreen> {
                         ),
                 ),
               ],
+            ),
+      floatingActionButton: _uploading
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _pickAndUpload,
+              backgroundColor: const Color(0xFF4CAF50),
+              icon: const Icon(Icons.upload_file_rounded),
+              label: const Text('رفع ملف'),
             ),
     );
   }

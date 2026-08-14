@@ -36,7 +36,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
   final ScrollController _scroll = ScrollController();
   final List<_Msg> _messages = [];
   final AudioRecorder _recorder = AudioRecorder();
-  final ValueNotifier<String?> _playingId = ValueNotifier<String?>(null);
 
   bool _loading = true;
   bool _sending = false;
@@ -69,7 +68,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
-    _playingId.dispose();
     super.dispose();
   }
 
@@ -176,7 +174,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
       _scrollToBottom();
       // إنهاء حالة الانشغال فوراً قبل النطق (النطق التلقائي بالتوازي).
       if (mounted) setState(() => _sending = false);
-      unawaited(_speak(reply, messageId: assistant.id));
+      unawaited(_speakAuto(reply, messageId: assistant.id));
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
@@ -186,22 +184,12 @@ class _CompanionScreenState extends State<CompanionScreen> {
     }
   }
 
-  Future<void> _speak(String text, {required String messageId, String? rate}) async {
-    if (text.isEmpty) return;
-    try {
-      if (_playingId.value == messageId) {
-        stopSpeaking();
-        _playingId.value = null;
-        return;
-      }
-      stopSpeaking();
-      _playingId.value = messageId;
-      await speakSmart(text,
-          apiKey: widget.keys.geminiKey, rate: rate == '-25%' ? 0.75 : 1.0);
-      _playingId.value = null;
-    } catch (_) {
-      _playingId.value = null;
-    }
+  Future<void> _speakAuto(String text, {required String messageId}) async {
+    await PlaybackController.instance.play(
+      text,
+      apiKey: widget.keys.geminiKey,
+      messageId: messageId,
+    );
   }
 
   Future<void> _toggleVoice() async {
@@ -573,12 +561,14 @@ class _CompanionScreenState extends State<CompanionScreen> {
         final m = _messages[index];
         return _Bubble(
           message: m,
-          playingId: _playingId,
-          onSpeak: (id, rate) => _speak(m.text, messageId: id, rate: rate),
-          onStop: () async {
-            stopSpeaking();
-            _playingId.value = null;
-          },
+          playingId: PlaybackController.instance.activeId,
+          onSpeak: (id, rate) => PlaybackController.instance.play(
+            m.text,
+            apiKey: widget.keys.geminiKey,
+            rate: rate == '-25%' ? 0.75 : 1.0,
+            messageId: id,
+          ),
+          onStop: () async => PlaybackController.instance.stop(),
         );
       },
     );

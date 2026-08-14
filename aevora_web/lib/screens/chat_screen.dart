@@ -45,7 +45,6 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scroll = ScrollController();
 
   final AudioRecorder _recorder = AudioRecorder();
-  final ValueNotifier<String?> _playingId = ValueNotifier<String?>(null);
 
   bool _isLoading = false;
   bool _isListening = false;
@@ -67,7 +66,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
-    _playingId.dispose();
     super.dispose();
   }
 
@@ -106,7 +104,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) {
       setState(() {
         _messages.add(_ChatMessage(
-          'مرحباً بك في ايفورا!\n\nارفع مستنداتك من تبويب «المستندات» ثم اسألني عنها، أو اسألني مباشرة بأي لغة.',
+          'مرحباً بك في ايفورا!\n\nارفع مستنداتك من قسم «مستندات» أعلاه ثم اسألني عنها، أو اسألني مباشرة بأي لغة.',
           false,
         ));
       });
@@ -230,7 +228,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // إنهاء حالة الانشغال فوراً قبل النطق حتى لا تُعلَّق الواجهة على توليد
       // الصوت؛ النطق التلقائي يعمل بالتوازي ولا يحجب أي زر.
       if (mounted) setState(() => _isLoading = false);
-      unawaited(_speak(reply, messageId: assistant.id));
+      unawaited(_speakAuto(reply, messageId: assistant.id));
     } catch (e) {
       assistant.text = 'خطأ: $e';
       if (mounted) setState(() {});
@@ -240,27 +238,12 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _speak(String text, {required String messageId, String? rate}) async {
-    if (text.isEmpty) return;
-    try {
-      if (_playingId.value == messageId) {
-        stopSpeaking();
-        _playingId.value = null;
-        return;
-      }
-      stopSpeaking();
-      _playingId.value = messageId;
-      await speakSmart(text,
-          apiKey: widget.keys.geminiKey, rate: rate == '-25%' ? 0.75 : 1.0);
-      _playingId.value = null;
-    } catch (_) {
-      _playingId.value = null;
-    }
-  }
-
-  Future<void> _stopPlayback() async {
-    stopSpeaking();
-    _playingId.value = null;
+  Future<void> _speakAuto(String text, {required String messageId}) async {
+    await PlaybackController.instance.play(
+      text,
+      apiKey: widget.keys.geminiKey,
+      messageId: messageId,
+    );
   }
 
   Future<void> _toggleVoice() async {
@@ -344,10 +327,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemCount: _messages.length,
                   itemBuilder: (context, index) => _MessageBubble(
                     message: _messages[index],
-                    playingId: _playingId,
+                    playingId: PlaybackController.instance.activeId,
                     onSpeak: (id, rate) =>
-                        _speak(_messages[index].text, messageId: id, rate: rate),
-                    onStop: _stopPlayback,
+                        PlaybackController.instance.play(
+                      _messages[index].text,
+                      apiKey: widget.keys.geminiKey,
+                      rate: rate == '-25%' ? 0.75 : 1.0,
+                      messageId: id,
+                    ),
+                    onStop: () async => PlaybackController.instance.stop(),
                   ),
                 ),
                 if (_showDownButton)

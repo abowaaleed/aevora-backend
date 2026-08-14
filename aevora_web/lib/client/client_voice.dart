@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
 
@@ -136,6 +136,7 @@ Future<void> speakProfessional(
   String text, {
   required String apiKey,
   double rate = 1.0,
+  void Function()? onStart,
 }) async {
   final wav = await geminiTextToSpeech(apiKey: apiKey, text: text);
   final audio = _professionalPlayer ??= web.HTMLAudioElement();
@@ -160,6 +161,7 @@ Future<void> speakProfessional(
   }).toJS);
 
   await audio.play().toDart;
+  onStart?.call();
   await completer.future
       .timeout(const Duration(seconds: 120), onTimeout: () {});
   _revokeAudioUrl();
@@ -190,6 +192,10 @@ final List<web.AudioBufferSourceNode> _streamSources = [];
 bool _streamStop = false;
 Completer<void>? _streamCompleter;
 web.AudioBufferSourceNode? _streamLast;
+
+/// عدّادات لتقدير موضع الإيقاف المؤقت في النطق المتدفق (أُطر/عيّنات في الثانية).
+int _streamPlayedFrames = 0;
+int _streamSampleRate = 24000;
 
 web.AudioContext _ensureAudioContext() {
   var ctx = _audioCtx;
@@ -231,10 +237,14 @@ Future<void> speakProfessionalStreaming(
   String text, {
   required String apiKey,
   double rate = 1.0,
+  void Function()? onStart,
 }) async {
   _stopStreamPlayback();
   _streamStop = false;
+  _streamPlayedFrames = 0;
+  _streamSampleRate = 24000;
   final ctx = _ensureAudioContext();
+  var started = false;
   try {
     if (ctx.state == 'suspended') {
       await ctx.resume().toDart;
@@ -261,6 +271,8 @@ Future<void> speakProfessionalStreaming(
       if (_streamStop) return;
       final frames = pcm.length ~/ 2;
       if (frames <= 0) return;
+      _streamSampleRate = sampleRate;
+      _streamPlayedFrames += frames;
       final f32 = Float32List(frames);
       final bd = ByteData.sublistView(pcm);
       for (var i = 0; i < frames; i++) {
@@ -277,6 +289,10 @@ Future<void> speakProfessionalStreaming(
         nextStart = ctx.currentTime + 0.05;
       }
       src.start(nextStart);
+      if (!started) {
+        started = true;
+        onStart?.call();
+      }
       // مدة التشغيل الفعلية مع مراعاة سرعة التشغيل لتفادي فجوات/تداخل.
       nextStart += frames / sampleRate / rate;
       _streamLast = src;
@@ -418,16 +434,18 @@ Future<void> speakSmart(
   String text, {
   String? apiKey,
   double rate = 1.0,
+  void Function()? onStart,
 }) async {
   if (apiKey != null && apiKey.trim().isNotEmpty) {
     try {
-      await speakProfessionalStreaming(text, apiKey: apiKey, rate: rate);
+      await speakProfessionalStreaming(text,
+          apiKey: apiKey, rate: rate, onStart: onStart);
       return;
     } catch (_) {
       _stopStreamPlayback();
     }
   }
-  await speakText(text, rate: rate);
+  await speakText(text, rate: rate, onStart: onStart);
 }
 
 // ---------- واجهات Web Speech API (احتياطي مجاني بدون مفتاح) ----------
@@ -438,6 +456,8 @@ external SpeechSynthesis? get speechSynthesis;
 extension type SpeechSynthesis(JSObject _) implements JSObject {
   external void speak(SpeechSynthesisUtterance utterance);
   external void cancel();
+  external void pause();
+  external void resume();
   external JSArray<SpeechSynthesisVoice> getVoices();
 }
 
@@ -473,7 +493,11 @@ String detectLang(String text) => _hasArabic(text) ? 'ar-SA' : 'en-US';
 bool get isSpeechSynthesisSupported => speechSynthesis != null;
 
 /// نطق النص صوتياً عبر المتصفح (مجاني، متعدد اللغات، بدون خادم).
-Future<void> speakText(String text, {double rate = 1.0}) async {
+Future<void> speakText(
+  String text, {
+  double rate = 1.0,
+  void Function()? onStart,
+}) async {
   final synth = speechSynthesis;
   if (synth == null) {
     throw Exception('نطق الصوت غير مدعوم في هذا المتصفح');
@@ -510,6 +534,7 @@ Future<void> speakText(String text, {double rate = 1.0}) async {
   }).toJS;
 
   synth.speak(utterance);
+  onStart?.call();
   await completer.future.timeout(const Duration(seconds: 60), onTimeout: () {});
 }
 
@@ -561,5 +586,145 @@ String _sttError(String body) {
     return obj['error']?['message']?.toString() ?? body;
   } catch (_) {
     return body;
+  }
+}
+
+// ---------- التحكم العالمي بصوت ايفورا (شريط التحكم بالصوت) ----------
+
+enum PlaybackStatus { idle, loading, speaking, paused }
+
+/// متوسط تقريبي لعدد الأحرف المنطوقة في الثانية (لتقدير موضع الاستئناف).
+const double _kCharsPerSecond = 16;
+
+/// تقدير عدد الأحرف التي قُطعت فعلياً من النص عند لحظة الإيقاف المؤقت،
+/// وذلك من مدة الصوت المتدفق الذي صُدِّر حتى الآن.
+int _estimateResumeIndex(String text) {
+  if (_streamSampleRate <= 0 || text.isEmpty) return 0;
+  final elapsedSec = _streamPlayedFrames / _streamSampleRate;
+  final chars = (elapsedSec * _kCharsPerSecond).round();
+  return chars.clamp(0, text.length);
+}
+
+/// واجهة واحدة للتشغيل تتحكم بها جميع الشاشات، وتُشغّل شريط التحكم بالصوت:
+/// تشغيل · إيقاف مؤقت · استئناف · إيقاف كامل.
+class PlaybackController {
+  PlaybackController._();
+  static final PlaybackController instance = PlaybackController._();
+
+  /// حالة التشغيل الحالية (مصدر ظهور شريط التحكم).
+  final ValueNotifier<PlaybackStatus> status =
+      ValueNotifier<PlaybackStatus>(PlaybackStatus.idle);
+
+  /// النص الجاري نطقه (يُعرض مختصراً في الشريط).
+  final ValueNotifier<String> currentText = ValueNotifier<String>('');
+
+  /// هوية الرسالة الناطقة حالياً (لتظليل زر الاستماع في الفقاعة).
+  final ValueNotifier<String?> activeId = ValueNotifier<String?>(null);
+
+  String? _apiKey;
+  double _rate = 1.0;
+  int _resumeIndex = 0;
+  bool _browserSpeech = false;
+  int _token = 0;
+
+  bool get isActive => status.value != PlaybackStatus.idle;
+
+  /// تشغيل النص صوتياً. إن كان نفس النص (نفس [messageId]) قيد التشغيل
+  /// يُوقَف التشغيل كاملاً — لتلائم سلوك زر الفقاعة (تشغيل/إيقاف).
+  Future<void> play(
+    String text, {
+    String? apiKey,
+    double rate = 1.0,
+    String? messageId,
+  }) async {
+    if (text.trim().isEmpty) return;
+    if (messageId != null &&
+        activeId.value == messageId &&
+        status.value == PlaybackStatus.speaking) {
+      stop();
+      return;
+    }
+    stop();
+    _apiKey = apiKey;
+    _rate = rate;
+    _resumeIndex = 0;
+    _browserSpeech = apiKey == null || apiKey.trim().isEmpty;
+    currentText.value = text;
+    activeId.value = messageId;
+    status.value = PlaybackStatus.loading;
+    final token = ++_token;
+    try {
+      await speakSmart(text, apiKey: apiKey, rate: rate, onStart: () {
+        if (token == _token) status.value = PlaybackStatus.speaking;
+      });
+    } catch (_) {}
+    if (token == _token) {
+      status.value = PlaybackStatus.idle;
+      activeId.value = null;
+    }
+  }
+
+  /// إيقاف مؤقت:
+  /// - صوت المتصفح (Web Speech) يدعم الاستئناف من نفس الموضع مباشرة.
+  /// - النطق الاحترافي المتدفق يُوقَف ويُقدَّر موضع التوقف ليعاد توليد ما تبقّى.
+  Future<void> pause() async {
+    if (status.value != PlaybackStatus.speaking) return;
+    if (_browserSpeech) {
+      speechSynthesis?.pause();
+    } else {
+      _resumeIndex = _estimateResumeIndex(currentText.value);
+      // نُبطل مستقبل التشغيل القديم حتى لا يعيد الحالة إلى (خامل) بعد توقفه.
+      _token++;
+      speechSynthesis?.pause();
+      _stopProfessionalPlayer();
+      _stopStreamPlayback();
+    }
+    status.value = PlaybackStatus.paused;
+  }
+
+  /// استئناف الصوت من موضع الإيقاف المؤقت.
+  Future<void> resume() async {
+    if (status.value != PlaybackStatus.paused) return;
+    if (!_browserSpeech) {
+      final text = currentText.value;
+      if (text.isEmpty) {
+        stop();
+        return;
+      }
+      final remaining = text.substring(_resumeIndex.clamp(0, text.length)).trim();
+      if (remaining.isEmpty) {
+        stop();
+        return;
+      }
+      status.value = PlaybackStatus.loading;
+      final token = ++_token;
+      try {
+        await speakSmart(remaining, apiKey: _apiKey, rate: _rate, onStart: () {
+          if (token == _token) status.value = PlaybackStatus.speaking;
+        });
+      } catch (_) {}
+      if (token == _token) {
+        status.value = PlaybackStatus.idle;
+        activeId.value = null;
+      }
+      return;
+    }
+    final synth = speechSynthesis;
+    if (synth == null) {
+      stop();
+      return;
+    }
+    synth.resume();
+    status.value = PlaybackStatus.speaking;
+  }
+
+  /// إيقاف كامل: يقطع الصوت ويعيد الشريط إلى الحالة الخاملة.
+  void stop() {
+    _token++;
+    stopSpeaking();
+    status.value = PlaybackStatus.idle;
+    activeId.value = null;
+    currentText.value = '';
+    _resumeIndex = 0;
   }
 }
