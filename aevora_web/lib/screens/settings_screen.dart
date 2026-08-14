@@ -422,6 +422,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 12),
             Row(
               children: [
+                const Icon(Icons.record_voice_over_rounded,
+                    color: Color(0xFF81C784), size: 18),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('النطق الاحترافي (صوت ايفورا)',
+                      style: TextStyle(color: Colors.white, fontSize: 13)),
+                ),
+                Text(
+                  '${(u['tts']?['requests'] as num?)?.toInt() ?? 0} طلب · '
+                  '${(u['tts']?['chars'] as num?)?.toInt() ?? 0} حرف',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'الصوت الاحترافي من Gemini TTS بمفتاحك، وله حصة يومية مستقلة؛ '
+              'عند استنفادها يتحول النطق تلقائياً لصوت المتصفح.',
+              style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
                 const Text('رسائل المساعد الشخصي: ',
                     style: TextStyle(color: Colors.white54, fontSize: 12)),
                 Text(

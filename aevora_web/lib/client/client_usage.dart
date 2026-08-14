@@ -51,6 +51,18 @@ class LocalUsage {
   static Future<void> recordWhisper() => _bump('whisper');
   static Future<void> recordCompanion() => _bump('companion');
 
+  /// عدّاد استخدام النطق الاحترافي (صوت ايفورا عبر Gemini TTS):
+  /// يُحسب كل طلب TTS + عدد الأحرف المُنطوقة حتى يتمكن المستخدم من
+  /// متابعة حصة الصوت الاحترافي في يومه (عند استنفادها يتحول النطق
+  /// تلقائياً إلى صوت المتصفح الأساسي).
+  static Future<void> recordTts({int chars = 0}) async {
+    final date = _today();
+    final day = await _day(date);
+    day['tts'] = ((day['tts'] as num?) ?? 0) + 1;
+    day['tts_chars'] = ((day['tts_chars'] as num?) ?? 0) + chars;
+    await _writeDay(date, day);
+  }
+
   /// حالة اليوم الحالي بصيغة العرض (used/limit/remaining).
   static Future<Map<String, dynamic>> today() async {
     final date = _today();
@@ -74,6 +86,10 @@ class LocalUsage {
         'used': whisper,
         'limit': whisperLimit,
         'remaining': whisperLimit - whisper,
+      },
+      'tts': {
+        'requests': (day['tts'] as num?)?.toInt() ?? 0,
+        'chars': (day['tts_chars'] as num?)?.toInt() ?? 0,
       },
       'companion': (day['companion'] as num?)?.toInt() ?? 0,
     };

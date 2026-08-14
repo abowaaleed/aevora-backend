@@ -247,6 +247,8 @@ Future<void> speakProfessionalStreaming(
   _activeEngine = SpeechEngine.stream;
   final ctx = _ensureAudioContext();
   var started = false;
+  // احتساب طلب النطق الاحترافي (طلب + أحرف) حتى يظهر في عدّاد الاستهلاك.
+  LocalUsage.recordTts(chars: text.trim().length);
   try {
     if (ctx.state == 'suspended') {
       await ctx.resume().toDart;
@@ -456,11 +458,30 @@ Future<void> speakSmart(
       await speakProfessionalStreaming(text,
           apiKey: apiKey, rate: rate, onStart: onStart);
       return;
-    } catch (_) {
+    } catch (e) {
       _stopStreamPlayback();
+      // إخبار المستخدم بسبب التحول لصوت المتصفح الأساسي (حصة النطق
+      // الاحترافي، سياسة التشغيل التلقائي...) بدل الصمت المفاجئ.
+      PlaybackController.instance.fallbackNotice.value =
+          _friendlyTtsFallbackReason(e.toString());
     }
   }
   await speakText(text, rate: rate, onStart: onStart);
+}
+
+/// ترجمة سبب فشل النطق الاحترافي إلى رسالة واضحة للمستخدم.
+String _friendlyTtsFallbackReason(String raw) {
+  final r = raw.toLowerCase();
+  if (r.contains('429') ||
+      r.contains('quota') ||
+      r.contains('resource has been exhausted') ||
+      r.contains('rate limit')) {
+    return 'استُنفدت حصة النطق الاحترافي اليوم، يُستخدم الآن صوت المتصفح الأساسي. سيعود الصوت الطبيعي غداً.';
+  }
+  if (r.contains('التشغيل التلقائي')) {
+    return 'منع المتصفح النطق الاحترافي (سياسة التشغيل التلقائي)، يُستخدم صوت المتصفح الأساسي.';
+  }
+  return 'النطق الاحترافي غير متاح حالياً، يُستخدم صوت المتصفح الأساسي.';
 }
 
 // ---------- واجهات Web Speech API (احتياطي مجاني بدون مفتاح) ----------
@@ -626,6 +647,10 @@ class PlaybackController {
   /// هوية الرسالة الناطقة حالياً (لتظليل زر الاستماع في الفقاعة).
   final ValueNotifier<String?> activeId = ValueNotifier<String?>(null);
 
+  /// سبب التحول المؤقت إلى صوت المتصفح الأساسي (إن حدث) — يُعرض في شريط
+  /// الصوت حتى لا يتفاجأ المستخدم بانخفاض جودة الصوت.
+  final ValueNotifier<String?> fallbackNotice = ValueNotifier<String?>(null);
+
   int _token = 0;
 
   bool get isActive => status.value != PlaybackStatus.idle;
@@ -648,6 +673,7 @@ class PlaybackController {
     stop();
     currentText.value = text;
     activeId.value = messageId;
+    fallbackNotice.value = null;
     status.value = PlaybackStatus.loading;
     final token = ++_token;
     try {
@@ -711,5 +737,6 @@ class PlaybackController {
     status.value = PlaybackStatus.idle;
     activeId.value = null;
     currentText.value = '';
+    fallbackNotice.value = null;
   }
 }

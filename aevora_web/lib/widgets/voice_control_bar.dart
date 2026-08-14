@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../client/client_voice.dart';
 
 /// شريط التحكم بصوت ايفورا: يظهر أسفل الشاشة أثناء التشغيل ويوفّر
-/// إيقافاً مؤقتاً، استئنافاً، وإيقافاً كاملاً.
+/// إيقافاً مؤقتاً، استئنافاً، وإيقافاً كاملاً — ويعرض سبب تحول النطق
+/// إلى صوت المتصفح الأساسي إن حدث.
 class VoiceControlBar extends StatelessWidget {
   const VoiceControlBar({super.key});
 
@@ -65,6 +66,33 @@ class VoiceControlBar extends StatelessWidget {
                         style: const TextStyle(color: Colors.white54, fontSize: 11),
                       ),
                     ],
+                    ValueListenableBuilder<String?>(
+                      valueListenable: c.fallbackNotice,
+                      builder: (context, notice, _) {
+                        if (notice == null || notice.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.info_outline_rounded,
+                                  size: 12, color: Colors.amberAccent),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  notice,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: Colors.amberAccent, fontSize: 10),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
