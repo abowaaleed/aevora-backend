@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
+import '../client/client_companion.dart';
 import '../client/client_export.dart';
 import '../client/client_llm.dart';
 import '../client/client_rag.dart';
@@ -14,12 +15,9 @@ import '../client/client_voice.dart';
 import '../config.dart';
 import '../widgets/export_sheet.dart';
 
-const _chatSystemPrompt = '''
-أنت «ايفورا» — مساعد ذكي يجيب بلغة المستخدم (العربية أو الإنجليزية).
-إذا وُجدت مقتطفات من مستندات مرفوعة، أجب منها بدقة ودون اختلاق.
-إن لم تجد الإجابة في المستندات فقل ذلك بوضوح.
-''';
-
+/// المحادثة الموحّدة الذكية: تجيب عن الأسئلة عن المستندات المرفوعة وعن
+/// الأسئلة الشخصية والعامة (السلوك، التعليم، أي شيء) في محادثة واحدة —
+/// لا يختار المستخدم بين «محادثة» و«صديق» بعد الآن.
 class ChatScreen extends StatefulWidget {
   final KeySettings keys;
   const ChatScreen({super.key, required this.keys});
@@ -51,12 +49,28 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isThinking = false;
   bool _showDownButton = false;
 
+  String? _name;
+  String? _level;
+  int _taskCount = 0;
+  List<Map<String, dynamic>> _tasks = [];
+  List<String> _memories = [];
+  List<String> _goals = [];
+  List<String> _vocab = [];
+  List<String> _corrections = [];
+  String? _proactive;
+  String? _suggestedPrompt;
+  bool _proactiveDismissed = false;
+  bool _hideTasksPanel = true;
+  bool _hideMemoryPanel = true;
+
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_onScrollChanged);
     SyncStore.chatReloadTick.addListener(_onCloudReload);
     _loadHistory();
+    _refreshCompanion();
+    _maybeProactive();
   }
 
   @override
@@ -104,11 +118,142 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) {
       setState(() {
         _messages.add(_ChatMessage(
-          'مرحباً بك في ايفورا!\n\nارفع مستنداتك من قسم «مستندات» أعلاه ثم اسألني عنها، أو اسألني مباشرة بأي لغة.',
+          'مرحباً بك في ايفورا! 👋\n\nاسألني عن مستنداتك المرفوعة (من قسم «مستندات»)، '
+          'أو احكِ لي عن يومك، أو اسألني عن السلوك والتعليم وأي شيء — '
+          'كل ذلك في محادثة واحدة وسأتذكر ما يهمك.',
           false,
         ));
       });
     }
+  }
+
+  Future<void> _maybeProactive() async {
+    try {
+      await LocalCompanion.maybeGenerateProactive(widget.keys.geminiKey);
+    } catch (_) {}
+    await _refreshCompanion();
+  }
+
+  /// تحميل ما يعرفه ايفورا عن المستخدم (الاسم، المستوى، الذاكرة، المهام)
+  /// لعرضها في الرأس ولوحات المساعد.
+  Future<void> _refreshCompanion() async {
+    try {
+      final s = await LocalCompanion.loadState();
+      if (!mounted) return;
+      setState(() {
+        _name = s['profile']?['name'] as String?;
+        _level = s['profile']?['english_level'] as String?;
+        _memories = (s['memories'] as List?)?.cast<String>() ?? [];
+        _goals = (s['profile']?['goals'] as List?)?.cast<String>() ?? [];
+        _vocab = (s['profile']?['vocabulary'] as List?)?.cast<String>() ?? [];
+        _corrections =
+            (s['profile']?['last_corrections'] as List?)?.cast<String>() ?? [];
+        _tasks = (s['tasks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        _taskCount = _tasks.where((t) => t['completed'] != true).length;
+        if (!_proactiveDismissed) {
+          _proactive = s['proactive'] as String?;
+          _suggestedPrompt = s['suggested_prompt'] as String?;
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _dismissProactive() async {
+    setState(() {
+      _proactive = null;
+      _suggestedPrompt = null;
+      _proactiveDismissed = true;
+    });
+    try {
+      await LocalCompanion.acknowledgeProactive();
+    } catch (_) {}
+  }
+
+  Future<void> _toggleTask(Map<String, dynamic> task) async {
+    try {
+      await LocalCompanion.toggleTask(task['id'] as String);
+    } catch (_) {}
+    await _refreshCompanion();
+  }
+
+  Future<void> _deleteTask(Map<String, dynamic> task) async {
+    try {
+      await LocalCompanion.deleteTask(task['id'] as String);
+    } catch (_) {}
+    await _refreshCompanion();
+  }
+
+  Future<void> _addTask() async {
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141A2A),
+        title:
+            const Text('أضف مهمة تذكّرني بها', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textDirection: TextDirection.rtl,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(hintText: 'اكتب المهمة...'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إلغاء', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('حفظ', style: TextStyle(color: _green)),
+          ),
+        ],
+      ),
+    );
+    if (text != null && text.isNotEmpty) {
+      try {
+        await LocalCompanion.addTask(text);
+      } catch (_) {}
+      await _refreshCompanion();
+    }
+  }
+
+  Future<void> _resetMemory() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141A2A),
+        title: const Text('مسح ذاكرة المساعد؟', style: TextStyle(color: Colors.white)),
+        content: const Text(
+            'سيُمسح كل ما يعرفه عنك: اسمك، ذاكرته، مهامك، وسجل المحادثة. لا يمكن التراجع.',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('امسح', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      try {
+        await LocalCompanion.reset();
+      } catch (_) {}
+      _proactiveDismissed = false;
+      await _refreshCompanion();
+    }
+  }
+
+  String _buildSubtitle() {
+    final parts = <String>[];
+    if (_name != null && _name!.isNotEmpty) parts.add(_name!);
+    if (_level != null && _level!.isNotEmpty) parts.add(_level!);
+    if (parts.isEmpty) return 'اسألني عن ملفاتك أو عن أي شيء';
+    return parts.join(' · ');
   }
 
   /// عند تطبيق محادثة قادمة من السحابة (جهاز/تبويب آخر): نضيف الرسائل
@@ -192,12 +337,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final assistant = _ChatMessage('', false);
     setState(() => _messages.add(assistant));
 
-    var system = _chatSystemPrompt;
+    var system = await LocalCompanion.buildUnifiedSystemPrompt();
     try {
       if (await hasFiles()) {
         final chunks = await retrieveChunks(text, k: 6);
         final ctx = buildContextPrompt(chunks);
-        if (ctx.isNotEmpty) system = '$_chatSystemPrompt\n\n$ctx';
+        if (ctx.isNotEmpty) {
+          system = await LocalCompanion.buildUnifiedSystemPrompt(docContext: ctx);
+        }
       }
     } catch (_) {}
 
@@ -225,6 +372,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() {});
       _scrollToBottom();
       await _persistMessages();
+      // استخراج ما يستحق التذكّر (اسم، حقائق، مهام، مفردات، تصحيحات) من
+      // هذه المحادثة — في الخلفية دون إبطاء الواجهة.
+      unawaited(LocalCompanion.analyzeMessage(
+          widget.keys.geminiKey, text, reply));
+      unawaited(_refreshCompanion());
       // إنهاء حالة الانشغال فوراً قبل النطق حتى لا تُعلَّق الواجهة على توليد
       // الصوت؛ النطق التلقائي يعمل بالتوازي ولا يحجب أي زر.
       if (mounted) setState(() => _isLoading = false);
@@ -318,25 +470,32 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           _topBar(),
+          if (_proactive != null && !_proactiveDismissed) _proactiveCard(),
           Expanded(
             child: Stack(
               children: [
                 ListView.builder(
                   controller: _scroll,
                   padding: const EdgeInsets.all(16),
-                  itemCount: _messages.length,
-                  itemBuilder: (context, index) => _MessageBubble(
-                    message: _messages[index],
-                    playingId: PlaybackController.instance.activeId,
-                    onSpeak: (id, rate) =>
-                        PlaybackController.instance.play(
-                      _messages[index].text,
-                      apiKey: widget.keys.geminiKey,
-                      rate: rate == '-25%' ? 0.75 : 1.0,
-                      messageId: id,
-                    ),
-                    onStop: () async => PlaybackController.instance.stop(),
-                  ),
+                  itemCount: _messages.length + (_hasExtraPanels() ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (_hasExtraPanels() && index == _messages.length) {
+                      return _infoPanels();
+                    }
+                    final m = _messages[index];
+                    return _MessageBubble(
+                      message: m,
+                      playingId: PlaybackController.instance.activeId,
+                      onSpeak: (id, rate) =>
+                          PlaybackController.instance.play(
+                        m.text,
+                        apiKey: widget.keys.geminiKey,
+                        rate: rate == '-25%' ? 0.75 : 1.0,
+                        messageId: id,
+                      ),
+                      onStop: () async => PlaybackController.instance.stop(),
+                    );
+                  },
                 ),
                 if (_showDownButton)
                   Positioned(
@@ -407,32 +566,299 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _topBar() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
       color: const Color(0xFF0D1424),
-      child: Row(
+      child: Column(
         children: [
-          const Icon(Icons.auto_awesome_rounded, color: _green, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text('ايفورا — محادثة',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold)),
-                SizedBox(height: 2),
-                Text('يعمل بالكامل داخل متصفحك · البيانات محفوظة محلياً',
-                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1D3A1D),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.auto_awesome_rounded, color: _green, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('ايفورا — المساعد الذكي',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 2),
+                    Text(_buildSubtitle(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: _exportChat,
+                tooltip: 'تصدير المحادثة مع ترويج ايفورا',
+                icon: const Icon(Icons.ios_share_rounded, color: Colors.white70),
+              ),
+              IconButton(
+                onPressed: _resetMemory,
+                tooltip: 'مسح الذاكرة',
+                icon: const Icon(Icons.delete_sweep_outlined,
+                    color: Colors.white38, size: 20),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _clickableChip(
+                  Icons.memory_rounded,
+                  'ذاكرة: ${_memories.length}',
+                  active: !_hideMemoryPanel,
+                  onTap: () => setState(() => _hideMemoryPanel = !_hideMemoryPanel),
+                ),
+                _clickableChip(
+                  Icons.task_alt_rounded,
+                  'مهام: $_taskCount',
+                  active: !_hideTasksPanel,
+                  onTap: () => setState(() => _hideTasksPanel = !_hideTasksPanel),
+                ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: _exportChat,
-            tooltip: 'تصدير المحادثة مع ترويج ايفورا',
-            icon: const Icon(Icons.ios_share_rounded, color: Colors.white70),
+        ],
+      ),
+    );
+  }
+
+  Widget _clickableChip(IconData icon, String label,
+      {required bool active, required VoidCallback onTap}) {
+    return Tooltip(
+      message: active ? 'إخفاء' : 'إظهار',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: active
+                ? _green.withValues(alpha: 0.15)
+                : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: active ? Border.all(color: _green.withValues(alpha: 0.4)) : null,
           ),
+          child: Row(
+            children: [
+              Icon(icon, color: active ? _green : Colors.white54, size: 13),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: TextStyle(
+                      color: active ? _green : Colors.white70, fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _proactiveCard() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient:
+            const LinearGradient(colors: [Color(0xFF1D3A1D), Color(0xFF14292A)]),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _green.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.waving_hand_rounded, color: Colors.amber, size: 18),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text('لحظة من ايفورا',
+                    style: TextStyle(
+                        color: _green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold)),
+              ),
+              GestureDetector(
+                onTap: _dismissProactive,
+                child:
+                    const Icon(Icons.close_rounded, color: Colors.white38, size: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(_proactive ?? '', style: const TextStyle(color: Colors.white, height: 1.5)),
+          if (_suggestedPrompt != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _isLoading
+                    ? null
+                    : () {
+                        _dismissProactive();
+                        _send(_suggestedPrompt!);
+                      },
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.08),
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.auto_awesome_rounded, color: _green, size: 16),
+                label: const Text('ابدأ الآن'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  bool _hasExtraPanels() {
+    final showTasks = !_hideTasksPanel && _tasks.isNotEmpty;
+    final showMemory = !_hideMemoryPanel && _hasMemoryContent();
+    return showTasks || showMemory;
+  }
+
+  bool _hasMemoryContent() {
+    return _memories.isNotEmpty ||
+        _goals.isNotEmpty ||
+        _vocab.isNotEmpty ||
+        _corrections.isNotEmpty;
+  }
+
+  Widget _infoPanels() {
+    final children = <Widget>[];
+    if (!_hideTasksPanel && _tasks.isNotEmpty) {
+      children.add(_tasksPanel());
+      children.add(const SizedBox(height: 10));
+    }
+    if (!_hideMemoryPanel && _hasMemoryContent()) {
+      children.add(_memoryPanel());
+      children.add(const SizedBox(height: 10));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+  }
+
+  Widget _tasksPanel() {
+    return _panelCard(
+      icon: Icons.task_alt_rounded,
+      title: 'مهامك',
+      onClose: () => setState(() => _hideTasksPanel = true),
+      actions: InkWell(
+        onTap: _addTask,
+        child:
+            const Icon(Icons.add_circle_outline_rounded, color: _green, size: 20),
+      ),
+      child: Column(children: [for (final t in _tasks) _taskRow(t)]),
+    );
+  }
+
+  Widget _taskRow(Map<String, dynamic> t) {
+    final done = t['completed'] == true;
+    return Row(
+      children: [
+        Checkbox(value: done, activeColor: _green, onChanged: (_) => _toggleTask(t)),
+        Expanded(
+          child: InkWell(
+            onTap: () => _toggleTask(t),
+            child: Text(t['text'] as String? ?? '',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    decoration: done ? TextDecoration.lineThrough : null,
+                    decorationColor: Colors.white38)),
+          ),
+        ),
+        IconButton(
+          onPressed: () => _deleteTask(t),
+          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white38),
+        ),
+      ],
+    );
+  }
+
+  Widget _memoryPanel() {
+    final items = <String>[];
+    for (final g in _goals) {
+      items.add('🎯 $g');
+    }
+    items.addAll(_memories.map((m) => '🧠 $m'));
+    items.addAll(_vocab.map((v) => '📘 $v'));
+    items.addAll(_corrections.map((c) => '✏️ $c'));
+    return _panelCard(
+      icon: Icons.memory_rounded,
+      title: 'ما أعرفه عنك (${items.length})',
+      onClose: () => setState(() => _hideMemoryPanel = true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final item in items.take(12))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Text(item,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
+            ),
+          if (items.length > 12)
+            const Text('والمزيد...', style: TextStyle(color: Colors.white38, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _panelCard({
+    required IconData icon,
+    required String title,
+    required Widget child,
+    VoidCallback? onClose,
+    Widget? actions,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: const Color(0xFF141A2A), borderRadius: BorderRadius.circular(14)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: _green, size: 17),
+              const SizedBox(width: 6),
+              Text(title,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              if (actions != null) ...[
+                actions,
+                const SizedBox(width: 6),
+              ],
+              if (onClose != null)
+                Tooltip(
+                  message: 'إخفاء',
+                  child: InkWell(
+                    onTap: onClose,
+                    child: const Icon(Icons.close_rounded,
+                        color: Colors.white38, size: 20),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          child,
         ],
       ),
     );

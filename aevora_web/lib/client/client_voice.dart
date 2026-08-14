@@ -193,9 +193,12 @@ bool _streamStop = false;
 Completer<void>? _streamCompleter;
 web.AudioBufferSourceNode? _streamLast;
 
-/// عدّادات لتقدير موضع الإيقاف المؤقت في النطق المتدفق (أُطر/عيّنات في الثانية).
-int _streamPlayedFrames = 0;
-int _streamSampleRate = 24000;
+/// محرك النطق النشط حالياً — يحدد طريقة الإيقاف المؤقت/الاستئناف:
+/// النطق الاحترافي المتدفق يُوقَف عبر تعليق سياق الصوت (يستأنف من نفس
+/// الموضع بدقة)، وصوت المتصفح عبر Web Speech API.
+enum SpeechEngine { none, browser, stream }
+
+SpeechEngine _activeEngine = SpeechEngine.none;
 
 web.AudioContext _ensureAudioContext() {
   var ctx = _audioCtx;
@@ -241,8 +244,7 @@ Future<void> speakProfessionalStreaming(
 }) async {
   _stopStreamPlayback();
   _streamStop = false;
-  _streamPlayedFrames = 0;
-  _streamSampleRate = 24000;
+  _activeEngine = SpeechEngine.stream;
   final ctx = _ensureAudioContext();
   var started = false;
   try {
@@ -271,8 +273,6 @@ Future<void> speakProfessionalStreaming(
       if (_streamStop) return;
       final frames = pcm.length ~/ 2;
       if (frames <= 0) return;
-      _streamSampleRate = sampleRate;
-      _streamPlayedFrames += frames;
       final f32 = Float32List(frames);
       final bd = ByteData.sublistView(pcm);
       for (var i = 0; i < frames; i++) {
@@ -308,15 +308,30 @@ Future<void> speakProfessionalStreaming(
   );
 
   if (nextStart > 0 && !_streamStop) {
-    await completer.future.timeout(
-      Duration(seconds: 1 + (nextStart - ctx.currentTime + 10).ceil()),
-      onTimeout: () {},
-    );
+    // انتظار انتهاء التشغيل عبر حلقة تتفقد وقت سياق الصوت (الذي يتجمد أثناء
+    // الإيقاف المؤقت) بدل مهلة زمنية واحدة: فالإيقاف المؤقت لا يقطع التشغيل
+    // بل يعلّقه فيستأنف من نفس النقطة عند الطلب.
+    await _waitForStreamEnd(ctx, nextStart, completer);
   } else if (!completer.isCompleted) {
     completer.complete();
   }
   _streamSources.clear();
   _streamLast = null;
+  _activeEngine = SpeechEngine.none;
+}
+
+/// انتظار انتهاء النطق المتدفق. أثناء الإيقاف المؤقت يُعلَّق سياق الصوت
+/// فلا يتقدم [ctx.currentTime] وتبقى الحلقة منتظرة حتى الاستئناف أو الإيقاف.
+Future<void> _waitForStreamEnd(
+  web.AudioContext ctx,
+  double endTime,
+  Completer<void> completer,
+) async {
+  while (true) {
+    if (_streamStop || completer.isCompleted) return;
+    if (ctx.currentTime >= endTime - 0.02) return;
+    await Future.delayed(const Duration(milliseconds: 150));
+  }
 }
 
 /// سحب صوت Gemini على شكل أجزاء (SSE) واستدعاء [onChunk] لكل مقطع L16 يصل.
@@ -502,6 +517,7 @@ Future<void> speakText(
   if (synth == null) {
     throw Exception('نطق الصوت غير مدعوم في هذا المتصفح');
   }
+  _activeEngine = SpeechEngine.browser;
   synth.cancel();
 
   final lang = detectLang(text);
@@ -536,6 +552,7 @@ Future<void> speakText(
   synth.speak(utterance);
   onStart?.call();
   await completer.future.timeout(const Duration(seconds: 60), onTimeout: () {});
+  _activeEngine = SpeechEngine.none;
 }
 
 void stopSpeaking() {
@@ -593,18 +610,6 @@ String _sttError(String body) {
 
 enum PlaybackStatus { idle, loading, speaking, paused }
 
-/// متوسط تقريبي لعدد الأحرف المنطوقة في الثانية (لتقدير موضع الاستئناف).
-const double _kCharsPerSecond = 16;
-
-/// تقدير عدد الأحرف التي قُطعت فعلياً من النص عند لحظة الإيقاف المؤقت،
-/// وذلك من مدة الصوت المتدفق الذي صُدِّر حتى الآن.
-int _estimateResumeIndex(String text) {
-  if (_streamSampleRate <= 0 || text.isEmpty) return 0;
-  final elapsedSec = _streamPlayedFrames / _streamSampleRate;
-  final chars = (elapsedSec * _kCharsPerSecond).round();
-  return chars.clamp(0, text.length);
-}
-
 /// واجهة واحدة للتشغيل تتحكم بها جميع الشاشات، وتُشغّل شريط التحكم بالصوت:
 /// تشغيل · إيقاف مؤقت · استئناف · إيقاف كامل.
 class PlaybackController {
@@ -621,10 +626,6 @@ class PlaybackController {
   /// هوية الرسالة الناطقة حالياً (لتظليل زر الاستماع في الفقاعة).
   final ValueNotifier<String?> activeId = ValueNotifier<String?>(null);
 
-  String? _apiKey;
-  double _rate = 1.0;
-  int _resumeIndex = 0;
-  bool _browserSpeech = false;
   int _token = 0;
 
   bool get isActive => status.value != PlaybackStatus.idle;
@@ -645,10 +646,6 @@ class PlaybackController {
       return;
     }
     stop();
-    _apiKey = apiKey;
-    _rate = rate;
-    _resumeIndex = 0;
-    _browserSpeech = apiKey == null || apiKey.trim().isEmpty;
     currentText.value = text;
     activeId.value = messageId;
     status.value = PlaybackStatus.loading;
@@ -664,57 +661,46 @@ class PlaybackController {
     }
   }
 
-  /// إيقاف مؤقت:
-  /// - صوت المتصفح (Web Speech) يدعم الاستئناف من نفس الموضع مباشرة.
-  /// - النطق الاحترافي المتدفق يُوقَف ويُقدَّر موضع التوقف ليعاد توليد ما تبقّى.
+  /// إيقاف مؤقت دقيق: يُعلَّق الصوت في موضعه الحالي فيستأنف من نفس النقطة
+  /// تماماً عند الطلب — صوت المتصفح عبر Web Speech، والنطق المتدفق عبر
+  /// تعليق سياق الصوت.
   Future<void> pause() async {
     if (status.value != PlaybackStatus.speaking) return;
-    if (_browserSpeech) {
+    if (_activeEngine == SpeechEngine.browser) {
       speechSynthesis?.pause();
+    } else if (_activeEngine == SpeechEngine.stream) {
+      try {
+        await _ensureAudioContext().suspend().toDart;
+      } catch (_) {
+        return;
+      }
     } else {
-      _resumeIndex = _estimateResumeIndex(currentText.value);
-      // نُبطل مستقبل التشغيل القديم حتى لا يعيد الحالة إلى (خامل) بعد توقفه.
-      _token++;
-      speechSynthesis?.pause();
-      _stopProfessionalPlayer();
-      _stopStreamPlayback();
+      return;
     }
     status.value = PlaybackStatus.paused;
   }
 
-  /// استئناف الصوت من موضع الإيقاف المؤقت.
+  /// استئناف الصوت من موضع الإيقاف المؤقت بالضبط.
   Future<void> resume() async {
     if (status.value != PlaybackStatus.paused) return;
-    if (!_browserSpeech) {
-      final text = currentText.value;
-      if (text.isEmpty) {
+    if (_activeEngine == SpeechEngine.browser) {
+      final synth = speechSynthesis;
+      if (synth == null) {
         stop();
         return;
       }
-      final remaining = text.substring(_resumeIndex.clamp(0, text.length)).trim();
-      if (remaining.isEmpty) {
-        stop();
-        return;
-      }
-      status.value = PlaybackStatus.loading;
-      final token = ++_token;
+      synth.resume();
+    } else if (_activeEngine == SpeechEngine.stream) {
       try {
-        await speakSmart(remaining, apiKey: _apiKey, rate: _rate, onStart: () {
-          if (token == _token) status.value = PlaybackStatus.speaking;
-        });
-      } catch (_) {}
-      if (token == _token) {
-        status.value = PlaybackStatus.idle;
-        activeId.value = null;
+        await _ensureAudioContext().resume().toDart;
+      } catch (_) {
+        stop();
+        return;
       }
-      return;
-    }
-    final synth = speechSynthesis;
-    if (synth == null) {
+    } else {
       stop();
       return;
     }
-    synth.resume();
     status.value = PlaybackStatus.speaking;
   }
 
@@ -725,6 +711,5 @@ class PlaybackController {
     status.value = PlaybackStatus.idle;
     activeId.value = null;
     currentText.value = '';
-    _resumeIndex = 0;
   }
 }

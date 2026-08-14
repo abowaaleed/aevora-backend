@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../config.dart';
 import 'chat_screen.dart';
-import 'companion_screen.dart';
 import 'document_screen.dart';
 
-/// تبويب «المساعد» الموحّد: يجمع المحادثة (الأسئلة والمستندات)،
-/// رفع وإدارة المستندات، وصديق ايفورا للتعلّم والدردشة — في قسم واحد
-/// حتى لا يتشتت المستخدم بين تبويبات متعددة.
+/// تبويب «المساعد» الموحّد: محادثة ذكية واحدة تجيب عن المستندات وعن
+/// الأسئلة الشخصية والعامة (بفضل ذاكرة ايفورا ومهامه)، وقسم منفصل
+/// لرفع وإدارة المستندات.
 class AssistantScreen extends StatefulWidget {
   final KeySettings keys;
   const AssistantScreen({super.key, required this.keys});
@@ -32,7 +31,6 @@ class _AssistantScreenState extends State<AssistantScreen> {
             children: [
               ChatScreen(keys: widget.keys),
               DocumentScreen(keys: widget.keys),
-              CompanionScreen(keys: widget.keys),
             ],
           ),
         ),
@@ -53,10 +51,6 @@ class _AssistantScreenState extends State<AssistantScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: _segment(1, Icons.folder_shared_outlined, 'مستندات'),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _segment(2, Icons.psychology_alt_outlined, 'صديق'),
           ),
         ],
       ),

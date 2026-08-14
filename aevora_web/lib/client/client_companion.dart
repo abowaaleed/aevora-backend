@@ -160,6 +160,18 @@ class LocalCompanion {
     List<String> memories,
     List<Map<String, dynamic>> tasks,
   ) {
+    final parts = _memoryPromptParts(profile, memories, tasks);
+    parts.add('لا تذكر هذه القائمة للمستخدم مباشرة؛ استخدمها خلف الكواليس فقط.');
+    return parts.join('\n');
+  }
+
+  /// أجزاء ما يعرفه ايفورا عن المستخدم (اسم، مستوى، أهداف، اهتمامات، مفردات،
+  /// تصحيحات، حقائق، مهام) — تُستخدم في المحادثة الموحّدة ورسالة الصديق.
+  static List<String> _memoryPromptParts(
+    Map<String, dynamic> profile,
+    List<String> memories,
+    List<Map<String, dynamic>> tasks,
+  ) {
     final parts = <String>[
       'أنت «ايفورا»، المساعد الشخصي وصديق المستخدم لتحسين لغته الإنجليزية.',
       'تحدث دائماً باللغة العربية، وكن ودوداً وقصيراً وواضحاً.',
@@ -194,9 +206,37 @@ class LocalCompanion {
     if (open.isNotEmpty) {
       parts.add('مهامه الحالية: ${open.map((t) => t['text']).join('، ')}');
     }
+    return parts;
+  }
+
+  /// نظام المحادثة الموحّدة الذكية: يدمج ما يعرفه ايفورا عن المستخدم (اسم،
+  /// مستوى، ذاكرة، مهام، مفردات، تصحيحات) مع سياق المستندات المرفوعة في تلقيم
+  /// واحد — فيجيب عن الملفات وعن الأسئلة الشخصية والعامة في نفس المحادثة
+  /// دون أن يضطر المستخدم للتبديل بين أقسام.
+  static Future<String> buildUnifiedSystemPrompt({String docContext = ''}) async {
+    final parts = _memoryPromptParts(
+      await _getProfile(),
+      await _memories(),
+      await _tasks(),
+    );
+    if (docContext.trim().isNotEmpty) {
+      parts.add(docContext.trim());
+      parts.add('إذا كان السؤال عن المستندات المرفوعة فأجب منها بدقة ودون اختلاق '
+          'وإن لم تجد الإجابة فيها فقل ذلك بوضوح. أما الأسئلة الشخصية أو العامة '
+          'فأجب من معرفتك العامة.');
+    }
     parts.add('لا تذكر هذه القائمة للمستخدم مباشرة؛ استخدمها خلف الكواليس فقط.');
     return parts.join('\n');
   }
+
+  /// تحليل خلفي لمحادثة لاستخراج ما يستحق التذكّر (اسم، حقائق، مهام، مفردات،
+  /// تصحيحات) — يُستدعى بعد كل رد في المحادثة الموحّدة.
+  static Future<void> analyzeMessage(
+    String apiKey,
+    String userMsg,
+    String reply,
+  ) =>
+      _analyze(apiKey, userMsg, reply);
 
   /// تحليل خلفي للمحادثة لاستخراج ما يستحق التذكّر (اسم، حقائق، مهام، مفردات، تصحيحات).
   static Future<void> _analyze(String apiKey, String userMsg, String reply) async {
