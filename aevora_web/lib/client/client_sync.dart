@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../config.dart';
 import 'client_auth.dart';
@@ -10,6 +11,8 @@ import 'client_companion.dart';
 import 'client_rag.dart';
 import 'client_storage.dart';
 import 'client_usage.dart';
+import 'web_lifecycle_stub.dart'
+    if (dart.library.js_interop) 'web_lifecycle_web.dart' as web_lifecycle;
 
 /// مزامنة بيانات المستخدم (المحادثات، المساعد، العدادات، المفاتيح، الملفات)
 /// مع Cloud Firestore بمفتاح حساب Google — لتبقى كل البيانات ملازمة للمستخدم
@@ -42,6 +45,17 @@ class SyncStore {
   /// يُستدعى بعد تطبيق حالة قادمة من السحابة (لإعادة تحميل المفاتيح في الواجهة).
   static void Function()? onStateApplied;
 
+  /// يُزاد عند كل تطبيق لمحادثة قادمة من السحابة؛ تشترك شاشة المحادثة به
+  /// لإعادة قراءة [messages] المحلية (فشل نظام الاشتراك في تحديث الواجهة).
+  static final chatReloadTick = ValueNotifier<int>(0);
+
+  /// يرفع المفاتيح إذا كانت هناك جلسة لكن المتصفح لم يعد في المقدمة — حماية
+  /// من فقدان رسائل أثناء التبديل بين الأجهزة.
+  static void flushIfSession() {
+    if (!_active) return;
+    unawaited(pushNow());
+  }
+
   static bool get _active => isAuthEnabled && _user != null;
 
   /// يُستدعى بعد [initFirebase]. يسحب بيانات الحساب عند الدخول ويربط التغيّرات.
@@ -64,6 +78,11 @@ class SyncStore {
         _user = null;
         _ready = null;
       });
+      // عند مغادرة/إخفاء الصفحة (تحويل تبويب/إغلاق) نرفع أي مفتاح لم يُرفع بعد
+      // حتى لا يضيع عند التبديل بين الأجهزة.
+      // عند مغادرة/إخفاء الصفحة (تحويل تبويب/إغلاق) نرفع أي مفتاح لم يُرفع بعد
+      // حتى لا يضيع عند التبديل بين الأجهزة.
+      web_lifecycle.attachLifecycleFlush(flushIfSession);
     } catch (_) {
       _user = null;
       _ready = null;
@@ -143,6 +162,9 @@ class SyncStore {
       }
       await _applyCloudFiles(data);
     } catch (_) {}
+    // أبلغ شاشة المحادثة أن المحادثة المحلية تغيّرت من السحابة حتى تعيد
+    // قراءتها وتُحدّث رسائلها (نظام الاشتراك وحده لم يُحدث الواجهة).
+    chatReloadTick.value++;
     try {
       onStateApplied?.call();
     } catch (_) {}
@@ -296,6 +318,20 @@ class SyncStore {
     if (!_active) return;
     try {
       final state = await _collectLocalState();
+      // دمج المحادثة مع ما هو موجود فعلاً في السحابة قبل الكتابة: أي رفع من
+      // جهاز بقائمة أقدم/أقصر (تابع قديم، جهاز فارغ بعد مسح التخزين) لا
+      // يمسح أبداً رسائل جهاز آخر — الدمج يضيف فقط ولا يحذف.
+      try {
+        final ref = FirebaseFirestore.instance
+            .collection(_collection)
+            .doc(_user!.uid);
+        final cloud = await ref.get(const GetOptions(source: Source.server));
+        final cloudChat = cloud.data()?['chat_messages'];
+        if (cloudChat is List && cloudChat.isNotEmpty) {
+          state['chat_messages'] =
+              mergeChatMessages(state['chat_messages'], cloudChat);
+        }
+      } catch (_) {}
       await FirebaseFirestore.instance
           .collection(_collection)
           .doc(_user!.uid)

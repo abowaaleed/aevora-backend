@@ -56,11 +56,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScrollChanged);
+    SyncStore.chatReloadTick.addListener(_onCloudReload);
     _loadHistory();
   }
 
   @override
   void dispose() {
+    SyncStore.chatReloadTick.removeListener(_onCloudReload);
     _scroll.removeListener(_onScrollChanged);
     _input.dispose();
     _scroll.dispose();
@@ -86,11 +88,13 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final v = await LocalDb.kvGetValue('chat_messages');
       if (v is List && v.isNotEmpty) {
+        final knownIds = <String>{};
         final msgs = v
             .whereType<Map>()
             .map((m) => _ChatMessage((m['text'] ?? '').toString(),
                 m['role'] == 'user', id: (m['id'] ?? '').toString()))
             .where((m) => m.text.trim().isNotEmpty)
+            .where((m) => knownIds.add(m.id))
             .toList();
         if (msgs.isNotEmpty && mounted) {
           setState(() => _messages.addAll(msgs));
@@ -109,6 +113,37 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// عند تطبيق محادثة قادمة من السحابة (جهاز/تبويب آخر): نضيف الرسائل
+  /// المفقودة فقط دون مسح ما في الواجهة حالياً — حتى لا تختفي رسالة أبداً.
+  void _onCloudReload() {
+    if (!mounted) return;
+    unawaited(_mergeFromStore());
+  }
+
+  Future<void> _mergeFromStore() async {
+    try {
+      final v = await LocalDb.kvGetValue('chat_messages');
+      if (v is! List) return;
+      final knownIds = <String>{for (final m in _messages) m.id};
+      final adds = <_ChatMessage>[];
+      for (final raw in v.whereType<Map>()) {
+        final text = (raw['text'] ?? '').toString();
+        if (text.trim().isEmpty) continue;
+        final role = (raw['role'] ?? '').toString();
+        final id = (raw['id'] ?? '').toString();
+        final msg =
+            _ChatMessage(text, role == 'user', id: id.isEmpty ? null : id);
+        if (knownIds.contains(msg.id)) continue;
+        knownIds.add(msg.id);
+        adds.add(msg);
+      }
+      if (adds.isNotEmpty && mounted) {
+        setState(() => _messages.addAll(adds));
+        _scrollToBottom();
+      }
+    } catch (_) {}
+  }
+
   Future<void> _persistMessages() async {
     try {
       final list = _messages
@@ -119,7 +154,10 @@ class _ChatScreenState extends State<ChatScreen> {
       if (list.length > 100) {
         list.removeRange(0, list.length - 100);
       }
-      await LocalDb.kvPut('chat_messages', list);
+      // دمج مع الحالة المخزنة بدل استبدالها: لو جرت كتابة قبل اكتمال تحميل
+      // التاريخ (سباق عند فتح التطبيق) لا تُمسح الرسائل المحفوظة سابقاً.
+      final existing = await LocalDb.kvGetValue('chat_messages');
+      await LocalDb.kvPut('chat_messages', mergeChatMessages(existing, list));
       SyncStore.schedulePush();
     } catch (_) {}
   }

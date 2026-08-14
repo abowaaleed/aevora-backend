@@ -55,4 +55,36 @@ void main() {
     expect(merged.first['id'], isNotEmpty);
     expect(merged.first['role'], 'user');
   });
+
+  test('persist-style merge never shrinks stored history', () {
+    // محاكاة سباق فتح التطبيق: المحفوظ يحتوي التاريخ كاملاً، والواجهة
+    // لم تكتمل بعد فتحمل الرسالة الجديدة فقط — الدمج يجب ألا يمسح التاريخ.
+    final existing = [
+      {'id': 'm1', 'role': 'user', 'text': 'السؤال الأول'},
+      {'id': 'r1', 'role': 'model', 'text': 'الجواب الأول'},
+      {'id': 'm2', 'role': 'user', 'text': 'السؤال الثاني'},
+    ];
+    final inMemory = [
+      {'id': 'm3', 'role': 'user', 'text': 'رسالة جديدة للتو'},
+    ];
+    final merged = mergeChatMessages(existing, inMemory);
+    expect(merged.length, 4);
+    expect(merged.map((m) => m['id']), containsAll(['m1', 'r1', 'm2', 'm3']));
+    expect(merged.last['id'], 'm3');
+  });
+
+  test('push-style merge unions local with richer cloud', () {
+    // محاكاة رفع من جهاز بقائمة قديمة: السحابة أغنى — الدمج يحتفظ بالكل.
+    final local = [
+      {'id': 'm1', 'role': 'user', 'text': 'سؤال قديم'},
+    ];
+    final cloud = [
+      {'id': 'm1', 'role': 'user', 'text': 'سؤال قديم'},
+      {'id': 'm2', 'role': 'user', 'text': 'سؤال من جهاز آخر'},
+      {'id': 'r2', 'role': 'model', 'text': 'جوابه'},
+    ];
+    final merged = mergeChatMessages(local, cloud);
+    expect(merged.length, 3);
+    expect(merged.map((m) => m['id']), containsAll(['m1', 'm2', 'r2']));
+  });
 }
