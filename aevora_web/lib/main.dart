@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'client/client_auth.dart';
+import 'client/client_consent.dart';
+import 'client/client_plan.dart';
 import 'client/client_sync.dart';
 import 'config.dart';
 import 'screens/key_setup_screen.dart';
@@ -13,12 +15,16 @@ import 'screens/shell.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final keys = await AppStorage.load();
+  // تحميل الاشتراك والموافقات المحلية قبل عرض الواجهة.
+  await PlanStore.loadLocal();
+  await ConsentStore.loadLocal();
   try {
     await initFirebase();
     if (isAuthEnabled) {
       // سحب بيانات الحساب قبل عرض الواجهة، ثم ربط تغيّرات الجلسة.
       await SyncStore.prepare();
       SyncStore.startListening();
+      PlanStore.startListening();
       await SyncStore.waitForReady();
     }
   } catch (_) {

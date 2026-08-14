@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../config.dart';
 import 'client_auth.dart';
 import 'client_companion.dart';
+import 'client_consent.dart';
 import 'client_rag.dart';
 import 'client_storage.dart';
 import 'client_usage.dart';
@@ -159,6 +160,10 @@ class SyncStore {
       final keys = data['keys'];
       if (keys is Map && keys.isNotEmpty) {
         await _applyCloudKeys(Map<String, dynamic>.from(keys));
+      }
+      final consents = data['consents'];
+      if (consents is Map) {
+        await ConsentStore.applyRemote(consents);
       }
       await _applyCloudFiles(data);
     } catch (_) {}

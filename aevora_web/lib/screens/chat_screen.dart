@@ -8,6 +8,7 @@ import 'package:record/record.dart';
 import '../client/client_companion.dart';
 import '../client/client_export.dart';
 import '../client/client_llm.dart';
+import '../client/client_plan.dart';
 import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
@@ -455,7 +456,9 @@ class _ChatScreenState extends State<ChatScreen> {
         .where((m) => m.text.trim().isNotEmpty)
         .map((m) => {'role': m.isUser ? 'user' : 'model', 'text': m.text})
         .toList();
-    final text = buildExportText(msgs);
+    // الخطة المدفوعة تصدر المحادثة دون الترويج التلقائي.
+    final text = buildExportText(msgs,
+        includePromo: !PlanStore.current.value.isPremium);
     final now = DateTime.now();
     final stamp = '${now.year}${now.month.toString().padLeft(2, '0')}'
         '${now.day.toString().padLeft(2, '0')}_'

@@ -2,13 +2,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../client/client_auth.dart';
+import '../client/client_plan.dart';
 import '../client/client_rag.dart';
 import '../client/client_sync.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
+import '../legal_content.dart';
+import 'consents_screen.dart';
 import 'document_screen.dart';
 import 'key_setup_screen.dart';
+import 'legal_screen.dart';
 import 'memory_screen.dart';
+import 'subscription_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final KeySettings keys;
@@ -87,17 +92,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _pickAndIndex() async {
     if (_uploading) return;
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
+      final files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt'],
       );
-      if (result == null || result.files.isEmpty) return;
-
-      final files = result.files.where((f) => f.bytes != null).toList();
-      if (files.isEmpty) {
-        throw Exception('لم يُقرأ أي ملف.');
-      }
+      if (files.isEmpty) return;
 
       if (!mounted) return;
       setState(() => _uploading = true);
@@ -106,7 +105,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final total = files.length;
       for (final f in files) {
         try {
-          await indexLocalFile(f.name, f.bytes!);
+          final bytes = await f.readAsBytes();
+          await indexLocalFile(f.name, bytes);
           // رفع الملف مع الحساب (إن كان مسجلاً) ليتوفر في أي جهاز آخر.
           SyncStore.schedulePush();
         } catch (_) {
@@ -143,6 +143,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _subscriptionCard(),
+          const SizedBox(height: 16),
           if (isAuthEnabled) ..._accountSection(),
           const Text('مفاتيحك الخاصة',
               style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
@@ -222,6 +224,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 12),
           const Divider(color: Colors.white12),
           const SizedBox(height: 8),
+          const Text(
+            'السياسة والشروط',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+          ),
+          const SizedBox(height: 8),
+          _legalTile(
+            icon: Icons.description_outlined,
+            title: 'شروط الاستخدام',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const LegalScreen(document: termsDocument),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _legalTile(
+            icon: Icons.privacy_tip_outlined,
+            title: 'سياسة الخصوصية',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const LegalScreen(document: privacyDocument),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _legalTile(
+            icon: Icons.admin_panel_settings_outlined,
+            title: 'الموافقات والضوابط',
+            subtitle: 'البيانات، الموافقات، والتواصل',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ConsentsScreen()),
+            ),
+          ),
+          const SizedBox(height: 24),
           const Text(
             'كيف تعمل المفاتيح؟',
             style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
@@ -530,6 +566,91 @@ class _SettingsScreenState extends State<SettingsScreen> {
         leading: Icon(icon, color: const Color(0xFF81C784)),
         title: Text(title, style: const TextStyle(color: Colors.white)),
         subtitle: Text(value, style: const TextStyle(color: Colors.white54)),
+      ),
+    );
+  }
+
+  /// بطاقة «الاشتراك والترقية» البارزة في أعلى الإعدادات.
+  Widget _subscriptionCard() {
+    return ValueListenableBuilder<PlanState>(
+      valueListenable: PlanStore.current,
+      builder: (context, state, _) {
+        final premium = state.isPremium;
+        return Card(
+          color: premium ? const Color(0xFF1A2B1A) : const Color(0xFF141A2A),
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(
+              color: premium ? const Color(0xFF81C784) : Colors.white12,
+              width: premium ? 1.4 : 1,
+            ),
+          ),
+          child: ListTile(
+            leading: Icon(
+              premium ? Icons.workspace_premium_rounded : Icons.auto_awesome,
+              color: premium ? const Color(0xFF81C784) : Colors.white54,
+            ),
+            title: Text(
+              premium ? 'اشتراكك: ${state.label}' : 'الاشتراك والترقية',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              premium
+                  ? 'نطاق الاحترافي بلا حدود + تصدير بدون ترويج'
+                  : 'النطق الاحترافي بلا حدود، التصدير بدون ترويج، وخطط بدون مفاتيح',
+              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!premium)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4CAF50),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text('ترقية',
+                        style: TextStyle(
+                            color: Color(0xFF070B14),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800)),
+                  ),
+                const Icon(Icons.chevron_left, color: Colors.white38),
+              ],
+            ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const SubscriptionScreen(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _legalTile({
+    required IconData icon,
+    required String title,
+    String subtitle = '',
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      color: const Color(0xFF141A2A),
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(icon, color: const Color(0xFF81C784)),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        subtitle: subtitle.isEmpty
+            ? null
+            : Text(subtitle,
+                style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        trailing: const Icon(Icons.chevron_left, color: Colors.white38),
+        onTap: onTap,
       ),
     );
   }

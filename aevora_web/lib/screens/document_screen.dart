@@ -73,22 +73,11 @@ class _DocumentScreenState extends State<DocumentScreen> {
   Future<void> _pickAndUpload() async {
     if (_uploading) return;
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
+      final files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt'],
       );
-      if (result == null || result.files.isEmpty) return;
-
-      final files = result.files.where((f) => f.bytes != null).toList();
-      if (files.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('لم يُقرأ أي ملف.')),
-          );
-        }
-        return;
-      }
+      if (files.isEmpty) return;
 
       if (!mounted) return;
       setState(() => _uploading = true);
@@ -96,7 +85,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
       var failed = 0;
       for (final f in files) {
         try {
-          await indexLocalFile(f.name, f.bytes!);
+          final bytes = await f.readAsBytes();
+          await indexLocalFile(f.name, bytes);
           SyncStore.schedulePush();
         } catch (_) {
           failed++;
