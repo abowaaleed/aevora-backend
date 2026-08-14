@@ -236,6 +236,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.7),
           ),
           const SizedBox(height: 24),
+          const Center(
+            child: Text(
+              'ايفورا • الإصدار $appVersion',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _clearing
                 ? null
