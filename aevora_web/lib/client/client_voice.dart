@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
@@ -200,13 +202,203 @@ bool _hasArabic(String text) => RegExp(r'[\u0600-\u06FF]').hasMatch(text);
 
 String detectLang(String text) => _hasArabic(text) ? 'ar-SA' : 'en-US';
 
+// ---------- صوت إيدج الاحترافي المجاني (بديل فوري بلا مفتاح) ----------
+//
+// خدمة نطق مايكروسوفت إيدج الطبيعية: تُستخدم مجاناً بدون أي مفتاح عبر
+// نفس البروتوكول الذي يستعمله متصفح إيدج، وتوفر أصواتاً احترافية للعربية
+// (ar-SA-HamedNeural / ar-SA-ZariyahNeural) والإنجليزية. جميع الدوال هنا
+// خالصة (بدون إدخال/إخراج) لسهولة اختبارها؛ النقل الفعلي (WebSocket) وتشغيل
+// الصوت في ملفا المنصة.
+
+/// المفتاح العام الموثوق لخدمة صوت إيدج (ثابت من متصفح إيدج، بلا مفاتيح خاصة).
+const String kEdgeTtsTrustedClientToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+
+/// الصوت العربي الاحترافي (سعودي — ذكر).
+const String kEdgeArabicVoice = 'ar-SA-HamedNeural';
+
+/// الصوت العربي الاحترافي (سعودي — أنثى).
+const String kEdgeArabicFemaleVoice = 'ar-SA-ZariyahNeural';
+
+/// الصوت الإنجليزي الاحترافي.
+const String kEdgeEnglishVoice = 'en-US-JennyNeural';
+
+/// إصدار Chromium الذي تُطابِق عليه إيدج توقيع الحماية (Sec-MS-GEC).
+const String kEdgeSecMsGecVersion = '1-143.0.3650.75';
+
+/// صيغة الصوت المطلوبة من إيدج (MP3 48kbps).
+const String kEdgeAudioFormat = 'audio-24khz-48kbitrate-mono-mp3';
+
+/// اختيار صوت إيدج المناسب للغة النص (العربية ← صوت سعودي طبيعي).
+String edgeVoiceForLang(String lang) {
+  final l = lang.toLowerCase();
+  if (l.startsWith('ar')) return kEdgeArabicVoice;
+  return kEdgeEnglishVoice;
+}
+
+/// استخراج نص XML-safe من النص المطلوب نطقه: يزيل أحرف التحكم غير المدعومة
+/// (التي ترفضها الخدمة أحياناً في ملفات OCR) ثم يفلتر رموز الترميز.
+String _edgeCleanText(String text) {
+  final chars = text.split('');
+  final out = StringBuffer();
+  for (final c in chars) {
+    final code = c.codeUnitAt(0);
+    if (code <= 8 || (code >= 11 && code <= 12) || (code >= 14 && code <= 31)) {
+      out.write(' ');
+    } else {
+      out.write(c);
+    }
+  }
+  return out.toString();
+}
+
+/// ترميز XML لنص داخل عنصر `speak` حتى لا يكسر الوسوم.
+String edgeXmlEscape(String text) => text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+
+/// تقسيم النص النظيف إلى مقاطع لا تتجاوز [maxChars] حرفاً عند حدود الكلمات
+/// (تجنّباً لحد رسالة الخدمة — إيدج يقبل نحو 4096 بايت لكل طلب).
+List<String> edgeTextChunks(String text, {int maxChars = 3000}) {
+  final clean = _edgeCleanText(text).trim();
+  if (clean.isEmpty) return const [];
+  if (clean.length <= maxChars) return [clean];
+  final parts = clean
+      .split(RegExp(r'[.!?؟،:؛\n]+\s*'))
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+  final chunks = <String>[];
+  var buf = StringBuffer();
+  void flush() {
+    if (buf.isNotEmpty) {
+      chunks.add(buf.toString().trim());
+      buf = StringBuffer();
+    }
+  }
+
+  for (final p in parts) {
+    if (p.length > maxChars) {
+      flush();
+      var rest = p;
+      while (rest.length > maxChars) {
+        chunks.add(rest.substring(0, maxChars));
+        rest = rest.substring(maxChars);
+      }
+      if (rest.isNotEmpty) buf.write(rest);
+    } else if (buf.length + p.length + 1 > maxChars) {
+      flush();
+      buf.write(p);
+    } else {
+      if (buf.isNotEmpty) buf.write(' ');
+      buf.write(p);
+    }
+  }
+  flush();
+  return chunks.isEmpty ? [clean] : chunks;
+}
+
+/// توقيع زمني بأسلوب إيدج (رأس X-Timestamp) — بصيغة JavaScript Date.
+String edgeTimestamp(DateTime now) {
+  const wd = [
+    'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+  ];
+  const mo = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${wd[now.weekday - 1]} ${mo[now.month - 1]} ${two(now.day)} '
+      '${now.year} ${two(now.hour)}:${two(now.minute)}:${two(now.second)} '
+      'GMT+0000 (Coordinated Universal Time)';
+}
+
+/// توليد توقيع الحماية Sec-MS-GEC الذي تطلبه خدمة إيدج منذ 2024:
+/// SHA-256(وقت ويندوز المقرب لخمس دقائق + المفتاح الموثوق) بالأحرف الكبيرة.
+String edgeSecMsGec(DateTime now, {String token = kEdgeTtsTrustedClientToken}) {
+  final unix = now.toUtc().millisecondsSinceEpoch / 1000.0;
+  const winEpoch = 11644473600;
+  final secs = unix + winEpoch;
+  final rounded = (secs - (secs % 300)).round();
+  final ticks = (rounded * 10000000).toStringAsFixed(0);
+  return sha256.convert(ascii.encode('$ticks$token')).toString().toUpperCase();
+}
+
+/// معرف اتصال عشوائي (32 رقماً سداسياً) — تطلبه الخدمة كمعرّف للجلسة.
+String edgeConnectionId([math.Random? rng]) {
+  final r = rng ?? math.Random.secure();
+  final sb = StringBuffer();
+  for (var i = 0; i < 32; i++) {
+    sb.write('0123456789abcdef'[r.nextInt(16)]);
+  }
+  return sb.toString();
+}
+
+/// رابط WebSocket الكامل لخدمة إيدج (يُربط من ملف المنصة).
+String edgeTtsWsUrl({String connectionId = '', DateTime? now}) {
+  final id = connectionId.isEmpty ? edgeConnectionId() : connectionId;
+  final gec = edgeSecMsGec(now ?? DateTime.now());
+  return 'wss://speech.platform.bing.com/consumer/speech/synthesize/'
+      'readaloud/edge/v1?TrustedClientToken=$kEdgeTtsTrustedClientToken'
+      '&ConnectionId=$id&Sec-MS-GEC=$gec'
+      '&Sec-MS-GEC-Version=$kEdgeSecMsGecVersion';
+}
+
+/// رسالة إعداد الاتصال (تُرسل نصياً فور فتح WebSocket).
+String edgeConfigMessage({DateTime? now}) {
+  final ts = edgeTimestamp(now ?? DateTime.now());
+  return 'X-Timestamp:$ts\r\n'
+      'Content-Type:application/json; charset=utf-8\r\n'
+      'Path:speech.config\r\n\r\n'
+      '{"context":{"synthesis":{"audio":{"metadataoptions":'
+      '{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
+      '"outputFormat":"$kEdgeAudioFormat"}}}}\r\n';
+}
+
+/// رسالة SSML لكل مقطع نصي (تُرسل نصياً؛ إيدج يعيد الصوت بعدها).
+String edgeSsmlMessage({
+  required String voice,
+  required String text,
+  double rate = 1.0,
+  DateTime? now,
+}) {
+  final ts = edgeTimestamp(now ?? DateTime.now());
+  final ratePct = '${((rate - 1) * 100).round()}%';
+  final body = "<speak version='1.0' "
+      "xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
+      "<voice name='$voice'>"
+      "<prosody pitch='+0Hz' rate='$ratePct' volume='+0%'>"
+      '${edgeXmlEscape(_edgeCleanText(text))}'
+      '</prosody></voice></speak>';
+  return 'X-RequestId:${edgeConnectionId()}\r\n'
+      'Content-Type:application/ssml+xml\r\n'
+      'X-Timestamp:${ts}Z\r\n'
+      'Path:ssml\r\n\r\n'
+      '$body';
+}
+
+/// استخراج حمولة الصوت من إطار WebSocket ثنائي لخدمة إيدج:
+/// أول بايتين = طول الترويسة (كبير نهاية)، ثم الترويسة، ثم \r\n، ثم الصوت.
+Uint8List edgeAudioFromFrame(Uint8List frame) {
+  if (frame.length < 2) return Uint8List(0);
+  final headerLen = (frame[0] << 8) | frame[1];
+  if (headerLen + 2 > frame.length) return Uint8List(0);
+  return frame.sublist(headerLen + 2);
+}
+
+/// هل الرسالة النصية من إيدج تعلن نهاية المقطع (turn.end)؟
+bool edgeIsTurnEnd(String message) => message.contains('Path: turn.end');
+
 /// يُستدعى عند أي تفاعل مستخدم (إرسال/تسجيل) لتهيئة الصوت داخل إيماءة
 /// المستخدم حتى لا يُحجب التشغيل بسياسة التشغيل التلقائي (المتصفح).
 void warmUpAudio() => voice_platform.warmUpAudio();
 
-/// نطق النص: يفضّل النطق الاحترافي المتدفق من Gemini (يبدأ فوراً) إن وُجد
-/// المفتاح، وإلا يعود فوراً لصوت المتصفح (Web Speech). خطة «مميز/مُدارة»
-/// ترفع الحد اليومي للنطق الاحترافي إلى اللانهاية.
+/// نطق النص: يفضّل النطق الاحترافي المتدفق من Gemini (إن وُجد المفتاح
+/// وضمن الحصة اليومية)، ثم صوت إيدج الاحترافي المجاني (بلا أي مفتاح)، ثم
+/// صوت المتصفح الأساسي المحسّن — مع تحويل صامت وسلس بينها بلا رسائل خطأ.
+/// خطة «مميز/مُدارة» ترفع الحد اليومي للنطق الاحترافي إلى اللانهاية.
 Future<void> speakSmart(
   String text, {
   String? apiKey,
@@ -216,77 +408,55 @@ Future<void> speakSmart(
   final hasKey = apiKey != null && apiKey.trim().isNotEmpty;
   final premium = PlanStore.current.value.isPremium;
 
-  if (hasKey && premium) {
-    // خطة مدفوعة: نطق احترافي بلا حدود.
-    try {
-      LocalUsage.recordTts(chars: text.trim().length);
-      await voice_platform
-          .speakProfessionalStreaming(text, apiKey: apiKey, rate: rate, onStart: onStart);
-      return;
-    } catch (e) {
-      voice_platform.stopPlaybackNow();
-      PlaybackController.instance.fallbackNotice.value =
-          _friendlyTtsFallbackReason(e.toString());
-    }
-  } else if (hasKey) {
-    // الخطة المجانية: حد يومي للنطق الاحترافي.
-    final used = (await LocalUsage.today())['tts'];
-    final usedChars = (used is Map ? used['chars'] : null) as num? ?? 0;
-    if (usedChars >= PlanStore.freeProfessionalTtsCharsPerDay) {
-      PlaybackController.instance.fallbackNotice.value =
-          'وصلت إلى الحد المجاني اليومي للنطق الاحترافي '
-          '(${PlanStore.freeProfessionalTtsCharsPerDay} حرف). '
-          'يعود العدّاد تلقائياً عند منتصف الليل (بتوقيت جهازك)، '
-          'أو رقِّ خطتك من «الإعدادات ← الاشتراك والترقية» للاستفادة بلا حدود.';
+  // الدرجة الأولى: النطق الاحترافي المتدفق من Gemini.
+  if (hasKey) {
+    if (premium) {
+      if (await _tryProfessional(text, apiKey, rate, onStart)) return;
     } else {
-      try {
-        LocalUsage.recordTts(chars: text.trim().length);
-        await voice_platform.speakProfessionalStreaming(text,
-            apiKey: apiKey, rate: rate, onStart: onStart);
+      final used = (await LocalUsage.today())['tts'];
+      final usedChars = (used is Map ? used['chars'] : null) as num? ?? 0;
+      if (usedChars < PlanStore.freeProfessionalTtsCharsPerDay &&
+          await _tryProfessional(text, apiKey, rate, onStart)) {
         return;
-      } catch (e) {
-        voice_platform.stopPlaybackNow();
-        PlaybackController.instance.fallbackNotice.value =
-            _friendlyTtsFallbackReason(e.toString());
       }
     }
   }
 
+  // الدرجة الثانية: صوت إيدج الاحترافي المجاني (أصوات طبيعية، بلا مفتاح).
+  try {
+    await voice_platform.speakEdgeTts(text, rate: rate, onStart: onStart);
+    return;
+  } catch (_) {
+    voice_platform.stopPlaybackNow();
+  }
+
+  // الدرجة الثالثة: صوت المتصفح الأساسي بأعلى جودة متاحة (فلترة الأصوات)،
+  // بمعدل نطق 0.95 وطبقة صوت 1.0 — التحويل هنا صامت تماماً.
   if (voice_platform.isBrowserSpeechSupported) {
-    await voice_platform.speakText(text, rate: rate, onStart: onStart);
+    await voice_platform.speakText(text,
+        rate: rate == 1.0 ? 0.95 : rate, onStart: onStart);
     return;
   }
-  final m = !hasKey
-      ? 'النطق الصوتي يتطلب مفتاح Gemini (النطق الاحترافي) — أضِفه من الإعدادات، أو رقِّ خطتك لميزة «مُدارة».'
-      : 'النطق الاحترافي غير متاح حالياً، وصوت المتصفح لا يعمل على الجوال. أضِف مفتاح Gemini وحاول مجدداً.';
-  PlaybackController.instance.fallbackNotice.value = m;
-  throw Exception(m);
+  throw Exception(
+      'لا يتوفر أي محرك نطق حالياً — أضف مفتاح Gemini أو جرّب على متصفح حديث.');
 }
 
-/// ترجمة سبب فشل النطق الاحترافي إلى رسالة واضحة للمستخدم — يميّز
-/// الازدحام المؤقت (يُعاد قريباً) عن نفاد الحصة اليومية (يعود غداً).
-String _friendlyTtsFallbackReason(String raw) {
-  final r = raw.toLowerCase();
-  if (r.contains('high demand')) {
-    return 'خدمة النطق الاحترافي مزدحمة حالياً — يُستخدم صوت المتصفح مؤقتاً، '
-        'وأعد المحاولة بعد قليل.';
+/// محاولة النطق الاحترافي عبر Gemini؛ ترجع true إن نجح التشغيل.
+Future<bool> _tryProfessional(
+  String text,
+  String apiKey,
+  double rate,
+  void Function()? onStart,
+) async {
+  try {
+    LocalUsage.recordTts(chars: text.trim().length);
+    await voice_platform.speakProfessionalStreaming(text,
+        apiKey: apiKey, rate: rate, onStart: onStart);
+    return true;
+  } catch (_) {
+    voice_platform.stopPlaybackNow();
+    return false;
   }
-  if (r.contains('429') &&
-      (r.contains('rate limit') || r.contains('too many requests'))) {
-    return 'تجاوزت حد النطق الاحترافي في الدقيقة — يُستخدم صوت المتصفح مؤقتاً، '
-        'وانتظر دقيقة قبل إعادة المحاولة.';
-  }
-  if (r.contains('429') ||
-      r.contains('quota') ||
-      r.contains('resource has been exhausted') ||
-      r.contains('rate limit')) {
-    return 'استُنفدت حصة النطق الاحترافي اليوم، يُستخدم الآن صوت المتصفح الأساسي. '
-        'سيعود الصوت الطبيعي غداً.';
-  }
-  if (r.contains('التشغيل التلقائي')) {
-    return 'منع المتصفح النطق الاحترافي (سياسة التشغيل التلقائي)، يُستخدم صوت المتصفح الأساسي.';
-  }
-  return 'النطق الاحترافي غير متاح حالياً، يُستخدم صوت المتصفح الأساسي.';
 }
 
 // ---------- التحكم العالمي بصوت ايفورا (شريط التحكم بالصوت) ----------

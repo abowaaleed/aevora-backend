@@ -123,20 +123,50 @@ Future<void> _ensureVoices(SpeechSynthesis synth) async {
   synth.onvoiceschanged = previous;
 }
 
-/// اختيار أفضل صوت للغة المطلوبة: تطابق تام، ثم نفس اللغة الأساسية (ar/en)؛
-/// وإن لم يوجد صوت للغة نُركه للمتصفح (دون تعيين voice) ليبحث بنفسه.
+/// اختيار أفضل صوت متاح للغة المطلوبة من بين أصوات المتصفح، بترتيب الجودة:
+/// يفضّل دائماً الصوت الطبيعي (Natural) ثم المحسّن (Enhanced) ثم العصري
+/// «Online» (يولّده المتصفح مباشرة بجودة أعلى)، ثم أصوات Google على أندرويد،
+/// ثم «Maged» — أفضل صوت عربي على iOS. وإن لم يوجد صوت للغة يُرك المتصفح
+/// يبحث بنفسه (دون تعيين voice).
 SpeechSynthesisVoice? _pickBestVoice(String lang) {
   final voices = _voiceCache;
   if (voices.isEmpty) return null;
   final exact = lang.toLowerCase();
   final base = lang.split('-').first.toLowerCase();
-  SpeechSynthesisVoice? fallback;
+  SpeechSynthesisVoice? best;
+  var bestScore = -1;
   for (final v in voices) {
     final l = v.lang.toLowerCase();
-    if (l == exact) return v;
-    if (fallback == null && l.startsWith(base)) fallback = v;
+    if (l != exact && l != base && !l.startsWith('$base-')) continue;
+    final score = _voiceQualityScore(v);
+    if (score > bestScore) {
+      bestScore = score;
+      best = v;
+    }
   }
-  return fallback;
+  return best;
+}
+
+/// تقييم جودة صوت المتصفح: «Natural» أعلى جودة (عصبية)، ثم «Enhanced»، ثم
+/// «Online» (توليد مباشر)، ثم أصوات «Google» على أندرويد، ثم «Maged» —
+/// الصوت العربي الأفضل على iOS. الأسماء تُستخدم مع قائمة أصوات المتصفح
+/// نفسها (اللغة معروفة من [SpeechSynthesisVoice.lang]).
+int _voiceQualityScore(SpeechSynthesisVoice v) {
+  final name = v.name.toLowerCase();
+  final lang = v.lang.toLowerCase();
+  var score = 0;
+  if (lang.startsWith('ar')) score += 10;
+  if (name.contains('natural')) score += 100;
+  if (name.contains('enhanced')) score += 90;
+  if (name.contains('online')) score += 85;
+  if (name.contains('google')) score += 70;
+  if (name.contains('maged')) score += 60;
+  if (name.contains('samantha') ||
+      name.contains('karen') ||
+      name.contains('daniel')) {
+    score += 40;
+  }
+  return score;
 }
 
 /// تفعيل محرك نطق المتصفح داخل إيماءة المستخدم: في iOS يُشغَّل الصوت فقط
@@ -506,6 +536,124 @@ int _sampleRateFromMime(String mime) {
     }
   }
   return rate;
+}
+
+// ---------- صوت إيدج الاحترافي المجاني (بديل فوري بلا مفتاح) ----------
+
+/// نطق النص عبر خدمة مايكروسوفت إيدج المجانية (WebSocket بلا أي مفتاح)
+/// بأصوات طبيعية احترافية للعربية والإنجليزية، ثم تشغيل الصوت (MP3) عبر
+/// Web Audio API — ليعمل كنطق احترافي فوري عند فشل/انقطاع مفتاح Gemini.
+Future<void> speakEdgeTts(
+  String text, {
+  double rate = 1.0,
+  void Function()? onStart,
+}) async {
+  _stopStreamPlayback();
+  _streamStop = false;
+  _activeEngine = SpeechEngine.stream;
+  final ctx = _ensureAudioContext();
+  try {
+    if (ctx.state == 'suspended') await ctx.resume().toDart;
+  } catch (_) {}
+  if (ctx.state == 'suspended') {
+    throw Exception('سياسة التشغيل التلقائي أوقفت صوت إيدج');
+  }
+
+  final chunks = edgeTextChunks(text);
+  if (chunks.isEmpty) throw Exception('لا يوجد نص للنطق');
+  final voice = edgeVoiceForLang(detectLang(text));
+
+  final ws = web.WebSocket(edgeTtsWsUrl());
+  ws.binaryType = 'arraybuffer';
+
+  final audio = <int>[];
+  var receivedAudio = false;
+  var failed = false;
+  var currentTurn = Completer<void>();
+
+  final msgSub = ws.onMessage.listen((ev) {
+    final data = ev.data;
+    if (data != null && data.isA<JSString>()) {
+      if (edgeIsTurnEnd((data as JSString).toDart) && !currentTurn.isCompleted) {
+        currentTurn.complete();
+      }
+    } else if (data != null && data.isA<JSArrayBuffer>()) {
+      final payload =
+          edgeAudioFromFrame((data as JSArrayBuffer).toDart.asUint8List());
+      if (payload.isNotEmpty) {
+        receivedAudio = true;
+        audio.addAll(payload);
+      }
+    }
+  });
+  final errSub = ws.onError.listen((_) {
+    failed = true;
+    if (!currentTurn.isCompleted) {
+      currentTurn.completeError(Exception('edge-ws-error'));
+    }
+  });
+  final closeSub = ws.onClose.listen((_) {
+    if (!currentTurn.isCompleted) currentTurn.complete();
+  });
+
+  try {
+    await ws.onOpen.first.timeout(const Duration(seconds: 12));
+    if (failed) throw Exception('تعذر الاتصال بخدمة إيدج');
+    ws.send(edgeConfigMessage().toJS);
+    for (final c in chunks) {
+      if (_streamStop) return;
+      ws.send(edgeSsmlMessage(voice: voice, text: c, rate: rate).toJS);
+      var gotEnd = false;
+      try {
+        await currentTurn.future.timeout(const Duration(seconds: 40));
+        gotEnd = true;
+      } catch (_) {}
+      if (_streamStop || failed) return;
+      if (!gotEnd) break;
+      currentTurn = Completer<void>();
+    }
+  } finally {
+    await msgSub.cancel();
+    await errSub.cancel();
+    await closeSub.cancel();
+    try {
+      ws.close();
+    } catch (_) {}
+  }
+
+  if (_streamStop) return;
+  if (!receivedAudio || audio.isEmpty) {
+    throw Exception('لم يصل صوت من خدمة إيدج');
+  }
+  final mp3 = Uint8List.fromList(audio);
+  final ab = JSArrayBuffer(mp3.length);
+  final view = JSUint8Array(ab);
+  view.toDart.setAll(0, mp3);
+  final decoded = await ctx
+      .decodeAudioData(ab)
+      .toDart
+      .timeout(const Duration(seconds: 20));
+  if (_streamStop) return;
+
+  final src = ctx.createBufferSource();
+  src.buffer = decoded;
+  src.playbackRate.value = rate;
+  src.connect(ctx.destination);
+  final completer = Completer<void>();
+  _streamCompleter = completer;
+  src.onended = ((web.Event _) {
+    if (!_streamStop && identical(src, _streamLast) && !completer.isCompleted) {
+      completer.complete();
+    }
+  }).toJS;
+  src.start();
+  _streamLast = src;
+  _streamSources.add(src);
+  onStart?.call();
+  await completer.future.timeout(const Duration(minutes: 5), onTimeout: () {});
+  _streamSources.clear();
+  _streamLast = null;
+  _activeEngine = SpeechEngine.none;
 }
 
 /// إيقاف أي صوت نشط فوراً (صوت المتصفح والنطق المتدفق).

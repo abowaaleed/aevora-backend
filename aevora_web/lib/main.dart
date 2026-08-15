@@ -59,8 +59,13 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
         if (uid == _lastAuthUid) return;
         _lastAuthUid = uid;
         // تأجيل التوجيه لما بعد انتهاء إطار البناء الحالي.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
           try {
+            // عند الدخول: انتظار اكتمال أول سحب قبل بناء الشاشات حتى لا
+            // تُفتح بعدادات صفر ومستندات مفقودة ثم تُحدَّث يدوياً فقط.
+            if (user != null) {
+              await SyncStore.waitForReady();
+            }
             final nav = _navigatorKey.currentState;
             if (nav == null) return;
             nav.pushNamedAndRemoveUntil(

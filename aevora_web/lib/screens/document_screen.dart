@@ -39,12 +39,14 @@ class _DocumentScreenState extends State<DocumentScreen> {
   void initState() {
     super.initState();
     DocumentScreen.refreshTick.addListener(_onRefreshTick);
+    SyncStore.cloudAppliedTick.addListener(_onRefreshTick);
     _load();
   }
 
   @override
   void dispose() {
     DocumentScreen.refreshTick.removeListener(_onRefreshTick);
+    SyncStore.cloudAppliedTick.removeListener(_onRefreshTick);
     super.dispose();
   }
 

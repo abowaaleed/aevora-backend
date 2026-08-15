@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../client/client_auth.dart';
 import '../client/client_plan.dart';
 import '../client/client_rag.dart';
+import '../client/client_sync.dart';
 import '../client/client_upload.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
@@ -46,6 +47,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    SyncStore.cloudAppliedTick.addListener(_onCloudData);
+    _loadUsage();
+  }
+
+  @override
+  void dispose() {
+    SyncStore.cloudAppliedTick.removeListener(_onCloudData);
+    super.dispose();
+  }
+
+  /// بيانات (عدادات/ملفات) وصلت من السحابة بعد بناء الشاشة — أعد التحميل
+  /// تلقائياً حتى لا تبقى العدادات صفراً بانتظار تحديث يدوي.
+  void _onCloudData() {
     _loadUsage();
   }
 
@@ -463,7 +477,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 4),
             const Text(
               'الصوت الاحترافي من Gemini TTS (نموذج تجريبي بحدود يومية أضيق من '
-              'المحادثة) بمفتاحك؛ عند استنفادها يتحول النطق تلقائياً لصوت المتصفح.',
+              'المحادثة) بمفتاحك؛ عند استنفادها أو تعذّره يتحول النطق تلقائياً '
+              'وَبلا انقطاع إلى صوت إيدج الاحترافي المجاني، ثم إلى صوت المتصفح إن لزم.',
               textAlign: TextAlign.right,
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
             ),
