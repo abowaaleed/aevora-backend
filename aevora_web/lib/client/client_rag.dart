@@ -1,10 +1,12 @@
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
+import 'client_ocr.dart' as ocr;
 import 'client_storage.dart';
+import 'text_arabic.dart';
+import 'text_files.dart';
 
 /// شريحة من مستند استُخرجت محلياً في المتصفح.
 class RagChunk {
@@ -16,21 +18,111 @@ class RagChunk {
 const _maxFileText = 2000000;
 const _dim = 256;
 
-/// استخراج نص PDF أو TXT محلياً (بدون أي خادم).
+const _imageExts = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'};
+
+/// الصيغ المقبولة في نافذة رفع الملفات.
+const allowedUploadExtensions = ['pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'];
+
+/// نص يوضّح الصيغ المدعومة لرفعه في واجهة المستخدم.
+const acceptedFormatsLabel = 'الصيغ المدعومة: PDF · Word (.docx) · TXT · صور (PNG/JPG)';
+
+/// استخراج النص محلياً (بدون أي خادم) من:
+/// PDF / Word (.docx) / TXT / صور (OCR على الويب).
+/// الصيغ المدعومة للرفع: pdf, docx, txt, png, jpg, jpeg, gif, bmp, webp.
 Future<String> extractText(String filename, List<int> bytes) async {
   final name = filename.toLowerCase();
-  if (name.endsWith('.txt')) {
-    return utf8.decode(bytes, allowMalformed: true);
+  final ext = name.contains('.') ? name.split('.').last : '';
+
+  if (name.endsWith('.txt')) return decodeTextFile(bytes);
+  if (name.endsWith('.pdf')) return _extractPdfText(bytes);
+  if (name.endsWith('.docx')) return docxToText(bytes);
+  if (name.endsWith('.doc')) {
+    throw Exception(
+        'ملفات Word القديمة (.doc) غير مدعومة — احفظ الملف بصيغة .docx ثم أعد الرفع.');
   }
-  if (name.endsWith('.pdf')) {
-    final doc = PdfDocument(inputBytes: Uint8List.fromList(bytes));
-    try {
-      return PdfTextExtractor(doc).extractText();
-    } finally {
-      doc.dispose();
+  if (_imageExts.contains(ext)) {
+    final text = await ocr.ocrImageBytes(bytes, ext).catchError((e) {
+      throw Exception(
+          'تعذّرت قراءة الصورة: ${e is Exception ? e.toString().replaceFirst('Exception: ', '') : e}');
+    });
+    if (text.trim().isEmpty) {
+      throw Exception('لم يتعرّف الـ OCR على أي نص في هذه الصورة.');
     }
+    return text;
   }
-  throw Exception('الصيغة غير مدعومة محلياً. المدعوم: PDF وTXT فقط.');
+  throw Exception(
+      'الصيغة غير مدعومة. المدعوم: PDF، Word (.docx)، TXT، وصور (PNG/JPG).');
+}
+
+/// استخراج نص PDF مع إعادة بناء اتجاه القراءة للعربية (RTL):
+/// نجمع الحروف بترتيب مواضعها الأفقية الحقيقية (ترتيب بصري) ثم
+/// نحوّلها إلى الترتيب المنطقي الصحيح عبر `visualToLogical`.
+Future<String> _extractPdfText(List<int> bytes) async {
+  final doc = PdfDocument(inputBytes: Uint8List.fromList(bytes));
+  try {
+    final extractor = PdfTextExtractor(doc);
+    final pageCount = doc.pages.count;
+    final sb = StringBuffer();
+
+    for (var p = 0; p < pageCount; p++) {
+      final lines =
+          extractor.extractTextLines(startPageIndex: p, endPageIndex: p);
+      for (final line in lines) {
+        final isArabicLine = containsArabic(line.text);
+        if (!isArabicLine) {
+          final t = line.text.trim();
+          if (t.isNotEmpty) sb.writeln(t);
+          continue;
+        }
+
+        // إعادة بناء السطر بالترتيب البصري (حسب موضع X لكل حرف).
+        final glyphs = <({String ch, double left, double right})>[];
+        for (final word in line.wordCollection) {
+          for (final g in word.glyphs) {
+            final left = g.bounds.left;
+            final right = left + g.bounds.width;
+            glyphs.add((ch: g.text, left: left, right: right));
+          }
+        }
+        if (glyphs.isEmpty) {
+          final t = line.text.trim();
+          if (t.isNotEmpty) sb.writeln(t);
+          continue;
+        }
+        glyphs.sort((a, b) => a.left.compareTo(b.left));
+
+        final lineH = line.bounds.height > 0 ? line.bounds.height : line.fontSize;
+        final threshold = 0.4 * lineH;
+        final visual = StringBuffer();
+        var lastRight = double.negativeInfinity;
+        for (final g in glyphs) {
+          final isSpaceGlyph = g.ch.trim().isEmpty && g.right - g.left > 0.1;
+          if (!isSpaceGlyph &&
+              lastRight != double.negativeInfinity &&
+              g.left - lastRight > threshold) {
+            visual.write(' ');
+          }
+          if (isSpaceGlyph) {
+            visual.write(' ');
+          } else if (g.ch.trim().isNotEmpty) {
+            visual.write(g.ch);
+          }
+          if (g.right > lastRight) lastRight = g.right;
+        }
+        final logical = visualToLogical(visual.toString());
+        if (logical.trim().isNotEmpty) sb.writeln(logical);
+      }
+    }
+
+    final result = sb.toString().trim();
+    if (result.isEmpty && pageCount > 0) {
+      throw Exception(
+          'هذا الملف يبدو ممسوحاً ضوئياً (صور فقط) ولا يحتوي نصاً قابلاً للاستخراج. يمكنك رفع الصور مباشرة.');
+    }
+    return result;
+  } finally {
+    doc.dispose();
+  }
 }
 
 List<String> chunkText(String text, {int maxChunk = 1200, int overlap = 150}) {

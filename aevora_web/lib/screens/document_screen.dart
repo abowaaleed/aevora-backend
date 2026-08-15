@@ -69,13 +69,13 @@ class _DocumentScreenState extends State<DocumentScreen> {
     }
   }
 
-  /// رفع ملفات PDF / TXT وفهرستها محلياً لتصبح قابلة للبحث في المحادثة.
+  /// رفع ملفات PDF / Word / TXT / صور وفهرستها محلياً للبحث في المحادثة.
   Future<void> _pickAndUpload() async {
     if (_uploading) return;
     try {
       final files = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt'],
+        allowedExtensions: allowedUploadExtensions,
       );
       if (files.isEmpty) return;
 
@@ -196,8 +196,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
               children: [
                 if (_error != null)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Text(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),                    child: Text(
                       _error!,
                       style: const TextStyle(color: Colors.orangeAccent, fontSize: 13),
                     ),
@@ -206,7 +205,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: _files.isEmpty
                       ? const Center(
                           child: Text(
-                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو TXT من زر «رفع ملف» بالأسفل.',
+                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو Word أو TXT أو صور من زر «رفع ملف» بالأسفل.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),
@@ -249,6 +248,15 @@ class _DocumentScreenState extends State<DocumentScreen> {
                             );
                           },
                         ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    acceptedFormatsLabel,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white38, fontSize: 12),
+                  ),
                 ),
               ],
             ),

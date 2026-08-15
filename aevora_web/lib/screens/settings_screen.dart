@@ -88,13 +88,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // توجّه الواجهة إلى شاشة الدخول تلقائياً عبر مراقب الجلسة.
   }
 
-  /// رفع مستندات PDF / TXT من الإعدادات وفهرستها للبحث فيها.
+  /// رفع مستندات PDF / Word / TXT / صور من الإعدادات وفهرستها للبحث فيها.
   Future<void> _pickAndIndex() async {
     if (_uploading) return;
     try {
       final files = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt'],
+        allowedExtensions: allowedUploadExtensions,
       );
       if (files.isEmpty) return;
 
@@ -199,12 +199,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     )
                   : const Icon(Icons.upload_file, color: Color(0xFF81C784)),
               title: Text(
-                _uploading ? 'جارٍ الفهرسة...' : 'رفع مستندات (PDF / TXT)',
+                _uploading
+                    ? 'جارٍ الفهرسة...'
+                    : 'رفع مستندات (PDF / Word / TXT / صور)',
                 style: const TextStyle(color: Colors.white),
               ),
-              subtitle: const Text(
-                  'ارفع ملفاتك هنا لتصبح قابلة للبحث في المحادثة',
-                  style: TextStyle(color: Colors.white54, fontSize: 12)),
+              subtitle: Text(
+                _uploading ? 'يرجى الانتظار...' : acceptedFormatsLabel,
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
               trailing: const Icon(Icons.chevron_left, color: Colors.white38),
               onTap: _uploading ? null : _pickAndIndex,
             ),
