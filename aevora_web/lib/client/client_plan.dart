@@ -97,8 +97,9 @@ const List<PlanInfo> planCatalog = [
     subtitle: 'إلى الأبد، بمفاتيحك',
     features: [
       'محادثة ومساعد شخصي بلا حدود',
-      'النطق الاحترافي بحد يومي',
-      'مستندات PDF/TXT',
+      'النطق الاحترافي بحد يومي (3,000 حرف)',
+      'رفع حتى 5 مستندات',
+      'ملفات حتى 10 م.ب — ومساحة تخزين 50 م.ب',
       'المزامنة عند تسجيل الدخول',
     ],
   ),
@@ -110,6 +111,8 @@ const List<PlanInfo> planCatalog = [
     features: [
       'كل مزايا المجانية',
       'النطق الاحترافي بلا حدود',
+      'رفع حتى 300 مستند',
+      'ملفات حتى 50 م.ب — ومساحة تخزين 1 ج.ب',
       'تصدير المحادثات بدون ترويج',
       'أصوات إضافية وأولوية الدعم',
     ],
@@ -128,6 +131,39 @@ const List<PlanInfo> planCatalog = [
     ],
   ),
 ];
+
+/// حدود استهلاك المستندات لكل خطة — تُعرض في الواجهة وتُفرض عند الرفع.
+class PlanQuota {
+  final int maxFiles;
+  final int maxFileSizeBytes;
+  final int maxStorageBytes;
+
+  const PlanQuota({
+    required this.maxFiles,
+    required this.maxFileSizeBytes,
+    required this.maxStorageBytes,
+  });
+
+  bool get isUnlimited => maxFiles >= 100000;
+}
+
+/// خطة «مجانية»: عدد محدود من المستندات وحجم/مساحة معقولة للمتصفح والجوال.
+const PlanQuota freePlanQuota = PlanQuota(
+  maxFiles: 5,
+  maxFileSizeBytes: 10 * 1024 * 1024, // 10 م.ب لكل ملف
+  maxStorageBytes: 50 * 1024 * 1024, // 50 م.ب إجمالي
+);
+
+/// خطة «مميز/مُدارة»: مساحة واسعة تكفي للاستخدام اليومي بلا قلق.
+const PlanQuota paidPlanQuota = PlanQuota(
+  maxFiles: 300,
+  maxFileSizeBytes: 50 * 1024 * 1024, // 50 م.ب لكل ملف
+  maxStorageBytes: 1024 * 1024 * 1024, // 1 ج.ب إجمالي
+);
+
+/// حصة المستندات لخطة المستخدم الحالية.
+PlanQuota quotaForPlan(PlanState state) =>
+    state.isPremium ? paidPlanQuota : freePlanQuota;
 
 /// إدارة حالة الاشتراك: قراءة من الجهاز (SharedPreferences) وربطها بحالة
 /// الحساب في Firestore (المصدر الرسمي بعد الدفع عبر بوابة Tap/Moyasar).

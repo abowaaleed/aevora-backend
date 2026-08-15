@@ -187,9 +187,16 @@ double _cosine(List<double> a, List<double> b) {
 }
 
 /// فهرسة ملف محلياً: استخراج النص + تقطيع + توليد المتجهات + حفظ في IndexedDB.
-Future<void> indexLocalFile(String filename, List<int> bytes) async {
+/// يُبلَّغ التقدم عبر [onProgress] (نسبة 0..1 واسم المرحلة) لتحديث الواجهة.
+Future<void> indexLocalFile(
+  String filename,
+  List<int> bytes, {
+  void Function(double fraction, String stage)? onProgress,
+}) async {
+  onProgress?.call(0.02, 'استخراج النص من الملف...');
   final raw = await extractText(filename, bytes);
   final text = raw.length > _maxFileText ? raw.substring(0, _maxFileText) : raw;
+  onProgress?.call(0.65, 'حفظ الملف محلياً...');
 
   await LocalDb.saveFileMeta({
     'id': filename,
@@ -203,6 +210,10 @@ Future<void> indexLocalFile(String filename, List<int> bytes) async {
   await LocalDb.clearChunksForFile(filename);
 
   final chunks = chunkText(text);
+  if (chunks.isEmpty) {
+    onProgress?.call(1.0, 'اكتمل');
+    return;
+  }
   for (var i = 0; i < chunks.length; i++) {
     await LocalDb.saveChunk({
       'id': '$filename::$i',
@@ -211,7 +222,9 @@ Future<void> indexLocalFile(String filename, List<int> bytes) async {
       'text': chunks[i],
       'vec': embedText(chunks[i]),
     });
+    onProgress?.call(0.65 + 0.35 * ((i + 1) / chunks.length), 'فهرسة النص للبحث...');
   }
+  onProgress?.call(1.0, 'اكتمل');
 }
 
 Future<bool> hasFiles() async => (await LocalDb.listFiles()).isNotEmpty;

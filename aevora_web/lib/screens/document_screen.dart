@@ -1,10 +1,13 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../client/client_plan.dart';
 import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
+import '../widgets/upload_progress_dialog.dart';
+import 'subscription_screen.dart';
 
 class DocumentScreen extends StatefulWidget {
   /// إشارة لتحديث قائمة الملفات من أي مكان (مثل بعد رفع من الإعدادات).
@@ -29,6 +32,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
   bool _loading = true;
   bool _uploading = false;
   String? _error;
+  int _storageBytes = 0;
 
   @override
   void initState() {
@@ -58,6 +62,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
                 (f['status'] ?? '').toString(),
                 (f['size'] as num?)?.toInt() ?? 0))
             .toList();
+        _storageBytes = rows.fold<int>(
+            0, (s, f) => s + ((f['size'] as num?)?.toInt() ?? 0));
         _loading = false;
       });
     } catch (e) {
@@ -69,7 +75,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
     }
   }
 
-  /// رفع ملفات PDF / Word / TXT / صور وفهرستها محلياً للبحث في المحادثة.
+  /// رفع ملفات PDF / Word / TXT / صور وفهرستها محلياً للبحث في المحادثة —
+  /// عبر نافذة تقدم موحّدة تفحص حدود الخطة أولاً.
   Future<void> _pickAndUpload() async {
     if (_uploading) return;
     try {
@@ -78,38 +85,34 @@ class _DocumentScreenState extends State<DocumentScreen> {
         allowedExtensions: allowedUploadExtensions,
       );
       if (files.isEmpty) return;
-
       if (!mounted) return;
+
       setState(() => _uploading = true);
-
-      var failed = 0;
-      for (final f in files) {
-        try {
-          final bytes = await f.readAsBytes();
-          await indexLocalFile(f.name, bytes);
-          SyncStore.schedulePush();
-        } catch (_) {
-          failed++;
-        }
-      }
-
+      final result = await showUploadFlow(
+        context,
+        files: files,
+        plan: PlanStore.current.value,
+      );
       if (!mounted) return;
       setState(() => _uploading = false);
+
+      if (result == null) return; // مُنع الرفع بالحدود (نافذة الترقي ظهرت).
+
       DocumentScreen.refreshTick.value++;
-      _load();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          failed == 0
-              ? 'تمت فهرسة ${files.length} ملفاً بنجاح.'
-              : 'تمت فهرسة ${files.length - failed} من ${files.length} ملفاً ($failed فشل).',
-        ),
-      ));
+      await _load();
+      if (!mounted) return;
+      final msg = result.uploaded == 0
+          ? 'فشل رفع الملفات:\n${result.errors.join('\n')}'
+          : result.failed == 0
+              ? 'تمت فهرسة ${result.uploaded} ملفاً بنجاح.'
+              : 'تمت فهرسة ${result.uploaded} ملفاً (فشل ${result.failed}):\n'
+                  '${result.errors.join('\n')}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
-      if (mounted) {
-        setState(() => _uploading = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('فشل الرفع: $e')));
-      }
+      if (!mounted) return;
+      setState(() => _uploading = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('فشل الرفع: $e')));
     }
   }
 
@@ -175,6 +178,69 @@ class _DocumentScreenState extends State<DocumentScreen> {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} م.ب';
   }
 
+  /// شريط حصة المستندات: العدد والمساحة مقابل حدود الخطة مع زر ترقية.
+  Widget _quotaBanner() {
+    return ValueListenableBuilder<PlanState>(
+      valueListenable: PlanStore.current,
+      builder: (context, plan, _) {
+        final quota = quotaForPlan(plan);
+        final count = _files.length;
+        final ratio = count / quota.maxFiles;
+        final nearLimit = !plan.isPremium && ratio >= 0.8;
+        final color = nearLimit
+            ? Colors.orangeAccent
+            : const Color(0xFF81C784);
+        return Container(
+          width: double.infinity,
+          color: const Color(0xFF0D1422),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Row(
+            children: [
+              Icon(Icons.folder_outlined, color: color, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'مستنداتك: $count من ${quota.maxFiles} · '
+                      'مساحة ${_sizeLabel(_storageBytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
+                      style: TextStyle(
+                        color: nearLimit ? Colors.orangeAccent : Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: ratio.clamp(0.0, 1.0),
+                        minHeight: 5,
+                        backgroundColor: Colors.white10,
+                        valueColor: AlwaysStoppedAnimation(color),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!plan.isPremium)
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const SubscriptionScreen()),
+                  ),
+                  icon: const Icon(Icons.workspace_premium_outlined, size: 16),
+                  label: const Text('ترقية',
+                      style: TextStyle(fontSize: 12)),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -194,6 +260,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
             )
           : Column(
               children: [
+                _quotaBanner(),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),                    child: Text(

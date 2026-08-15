@@ -4,10 +4,11 @@ import 'package:flutter/material.dart';
 import '../client/client_auth.dart';
 import '../client/client_plan.dart';
 import '../client/client_rag.dart';
-import '../client/client_sync.dart';
+import '../client/client_upload.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
 import '../legal_content.dart';
+import '../widgets/upload_progress_dialog.dart';
 import 'consents_screen.dart';
 import 'document_screen.dart';
 import 'key_setup_screen.dart';
@@ -39,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _usage;
   bool _usageLoading = false;
   String? _usageError;
+  Map<String, dynamic>? _docUsage;
 
   @override
   void initState() {
@@ -53,8 +55,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     try {
       final u = await LocalUsage.today();
+      final docs = await documentUsageSummary();
       if (!mounted) return;
-      setState(() => _usage = u);
+      setState(() {
+        _usage = u;
+        _docUsage = docs;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _usageError = 'تعذر جلب الاستهلاك: $e');
@@ -88,7 +94,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // توجّه الواجهة إلى شاشة الدخول تلقائياً عبر مراقب الجلسة.
   }
 
-  /// رفع مستندات PDF / Word / TXT / صور من الإعدادات وفهرستها للبحث فيها.
+  /// رفع مستندات PDF / Word / TXT / صور من الإعدادات وفهرستها للبحث فيها —
+  /// عبر نافذة تقدم موحّدة تفحص حدود الخطة أولاً.
   Future<void> _pickAndIndex() async {
     if (_uploading) return;
     try {
@@ -101,31 +108,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() => _uploading = true);
 
-      var failed = 0;
-      final total = files.length;
-      for (final f in files) {
-        try {
-          final bytes = await f.readAsBytes();
-          await indexLocalFile(f.name, bytes);
-          // رفع الملف مع الحساب (إن كان مسجلاً) ليتوفر في أي جهاز آخر.
-          SyncStore.schedulePush();
-        } catch (_) {
-          failed++;
-        }
-        if (mounted) setState(() {});
-      }
+      final result = await showUploadFlow(
+        context,
+        files: files,
+        plan: PlanStore.current.value,
+      );
+      if (!mounted) return;
+      setState(() => _uploading = false);
 
-      if (mounted) {
-        setState(() => _uploading = false);
-        DocumentScreen.refreshTick.value++;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            failed == 0
-                ? 'تمت فهرسة $total ملفاً بنجاح.'
-                : 'تمت فهرسة ${total - failed} من $total ملفاً ($failed فشل).',
-          ),
-        ));
-      }
+      if (result == null) return; // مُنع الرفع بالحدود (نافذة الترقي ظهرت).
+
+      DocumentScreen.refreshTick.value++;
+      final msg = result.uploaded == 0
+          ? 'فشل رفع الملفات:\n${result.errors.join('\n')}'
+          : result.failed == 0
+              ? 'تمت فهرسة ${result.uploaded} ملفاً بنجاح.'
+              : 'تمت فهرسة ${result.uploaded} ملفاً (فشل ${result.failed}):\n'
+                  '${result.errors.join('\n')}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
       if (mounted) {
         setState(() => _uploading = false);
@@ -476,6 +476,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            _documentsRow(),
             const SizedBox(height: 10),
             const Text(
               'هذه عدّادات تقريبية على جهازك ولا تعكس بالضرورة حصة المزود الفعلية '
@@ -598,6 +600,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ],
     );
+  }
+
+  /// صف حصة المستندات: العدد والمساحة مقابل حدود الخطة مع زر ترقية.
+  Widget _documentsRow() {
+    return ValueListenableBuilder<PlanState>(
+      valueListenable: PlanStore.current,
+      builder: (context, plan, _) {
+        final quota = quotaForPlan(plan);
+        final count = (_docUsage?['count'] as num?)?.toInt() ?? 0;
+        final bytes = (_docUsage?['bytes'] as num?)?.toInt() ?? 0;
+        final ratio = count / quota.maxFiles;
+        final nearLimit = !plan.isPremium && ratio >= 0.8;
+        final color = nearLimit ? Colors.orangeAccent : const Color(0xFF81C784);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.folder_outlined,
+                    color: Color(0xFF81C784), size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'المستندات: $count من ${quota.maxFiles} · '
+                    '${_sizeLabel(bytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
+                    style: TextStyle(
+                        color: nearLimit ? Colors.orangeAccent : Colors.white,
+                        fontSize: 13),
+                  ),
+                ),
+                if (!plan.isPremium)
+                  InkWell(
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const SubscriptionScreen()),
+                    ),
+                    child: const Text('ترقية',
+                        style: TextStyle(
+                            color: Color(0xFF81C784),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: ratio.clamp(0.0, 1.0),
+                minHeight: 8,
+                backgroundColor: Colors.white10,
+                valueColor: AlwaysStoppedAnimation(color),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _sizeLabel(int bytes) {
+    if (bytes < 1024) return '$bytes بايت';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} ك.ب';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} م.ب';
   }
 
   Widget _tile({required IconData icon, required String title, required String value}) {

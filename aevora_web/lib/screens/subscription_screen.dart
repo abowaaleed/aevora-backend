@@ -110,6 +110,8 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 if (i != planCatalog.length - 1) const SizedBox(height: 14),
               ],
               const SizedBox(height: 20),
+              _quotaComparison(state),
+              const SizedBox(height: 20),
               Card(
                 color: const Color(0xFF141A2A),
                 margin: EdgeInsets.zero,
@@ -165,6 +167,126 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// مقارنة الحدود بين الخطة المجانية و«مميز/مُدارة» — تُظهر للمستخدم
+  /// ما يغلقه الحد المجاني ليجذب الترقية.
+  Widget _quotaComparison(PlanState state) {
+    final free = freePlanQuota;
+    final paid = paidPlanQuota;
+    String size(int b) {
+      if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(0)} ك.ب';
+      if (b < 1024 * 1024 * 1024) {
+        return '${(b / (1024 * 1024)).toStringAsFixed(0)} م.ب';
+      }
+      return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(0)} ج.ب';
+    }
+
+    return Card(
+      color: const Color(0xFF141A2A),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.insights_rounded,
+                    color: Color(0xFF81C784), size: 20),
+                SizedBox(width: 8),
+                Text('قارن حدود الخطط',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _cmpRow(
+              'المستندات',
+              '${free.maxFiles} مستند',
+              '${paid.maxFiles} مستند',
+            ),
+            _cmpRow(
+              'حجم الملف الواحد',
+              size(free.maxFileSizeBytes),
+              size(paid.maxFileSizeBytes),
+            ),
+            _cmpRow(
+              'مساحة التخزين',
+              size(free.maxStorageBytes),
+              size(paid.maxStorageBytes),
+            ),
+            _cmpRow(
+              'النطق الاحترافي',
+              '${PlanStore.freeProfessionalTtsCharsPerDay} حرف/يوم',
+              'بلا حدود',
+              highlight: true,
+            ),
+            if (!state.isPremium) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _subscribe(PlanTier.premium),
+                  icon: const Icon(Icons.workspace_premium_outlined),
+                  label: const Text('رقِّ خطتك الآن — كل الحدود مفتوحة'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cmpRow(String label, String free, String paid,
+      {bool highlight = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(label,
+                style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Icon(highlight ? Icons.timer_outlined : Icons.close,
+                    size: 14,
+                    color: highlight
+                        ? Colors.orangeAccent
+                        : Colors.white24),
+                const SizedBox(width: 4),
+                Text(free,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: highlight
+                            ? Colors.orangeAccent
+                            : Colors.white54)),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                const Icon(Icons.check_circle_outline,
+                    size: 14, color: Color(0xFF81C784)),
+                const SizedBox(width: 4),
+                Text(paid,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF81C784))),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

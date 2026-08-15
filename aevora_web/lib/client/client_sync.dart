@@ -39,9 +39,11 @@ class SyncStore {
   // حدود نقل الملفات عبر Firestore (مستند واحد ≤ 1MB).
   static const _maxSyncChunks = 400;
   static const _maxSyncDocChars = 450000;
-  static const _maxBlobSyncBytes = 2 * 1024 * 1024;
-  static const _segmentChars = 390000;
+  static const _maxBlobSyncBytes = 50 * 1024 * 1024;
   static const _previewChars = 30000;
+  // كل جزء من الملف الكبير يُخزن في مستند مستقل ≤ _partChars حرف base64
+  // (≈ 300KB) ليبقى مستند Firestore الواحد بعيداً عن حد 1MB.
+  static const _partChars = 300000;
 
   /// يُستدعى بعد تطبيق حالة قادمة من السحابة (لإعادة تحميل المفاتيح في الواجهة).
   static void Function()? onStateApplied;
@@ -273,7 +275,8 @@ class SyncStore {
   }
 
   /// سحب محتوى الملفات الخام (blobs) للملفات القادمة من السحابة وغير الموجودة
-  /// محلياً، عبر تجزئة base64 مخزنة في مجموعة فرعية لكل حساب.
+  /// محلياً، عبر تجزئة base64 مخزنة في مجموعة فرعية لكل حساب — مع دعم
+  /// الملفات الكبيرة المقسّمة على عدة مستندات (multi).
   static Future<void> _pullBlobs(
       String uid, Map<String, dynamic>? data) async {
     try {
@@ -288,22 +291,42 @@ class SyncStore {
           .doc(uid)
           .collection('blobs')
           .get();
+      final docsById = {for (final d in cloudDocs.docs) d.id: d};
       for (final doc in cloudDocs.docs) {
         final name = doc.id;
         if (name.isEmpty || localNames.contains(name)) continue;
         final d = doc.data();
-        final segs = d['segments'];
-        if (segs is! Map) continue;
-        final count = (d['count'] as num?)?.toInt() ?? segs.length;
-        if (count <= 0) continue;
-        final sb = StringBuffer();
-        for (var i = 0; i < count; i++) {
-          final s = segs['$i']?.toString() ?? '';
-          if (s.isNotEmpty) sb.write(s);
+        final isMulti = d['multi'] == true;
+        if (isMulti) {
+          final count = (d['count'] as num?)?.toInt() ?? 0;
+          if (count <= 0) continue;
+          final sb = StringBuffer();
+          var ok = true;
+          for (var i = 0; i < count; i++) {
+            final s = docsById['$name#$i']?.data()['s']?.toString() ?? '';
+            if (s.isEmpty) {
+              ok = false;
+              break;
+            }
+            sb.write(s);
+          }
+          if (!ok || sb.isEmpty) continue;
+          final bytes = base64Decode(sb.toString());
+          await LocalDb.saveFileBlob(name, Uint8ListBytes(bytes, name));
+        } else {
+          final segs = d['segments'];
+          if (segs is! Map) continue;
+          final count = (d['count'] as num?)?.toInt() ?? segs.length;
+          if (count <= 0) continue;
+          final sb = StringBuffer();
+          for (var i = 0; i < count; i++) {
+            final s = segs['$i']?.toString() ?? '';
+            if (s.isNotEmpty) sb.write(s);
+          }
+          if (sb.isEmpty) continue;
+          final bytes = base64Decode(sb.toString());
+          await LocalDb.saveFileBlob(name, Uint8ListBytes(bytes, name));
         }
-        if (sb.isEmpty) continue;
-        final bytes = base64Decode(sb.toString());
-        await LocalDb.saveFileBlob(name, Uint8ListBytes(bytes, name));
       }
     } catch (_) {}
   }
@@ -393,9 +416,10 @@ class SyncStore {
     };
   }
 
-  /// رفع محتوى الملفات (blobs) عبر تجزئة base64 في مجموعة فرعية، مع تخطّي
-  /// الملفات الكبيرة (أكبر من حد مزامنة الملفات) والملفات غير المتغيّرة
-  /// (بمقارنة بصمة FNV) حتى لا تُرفع من جديد مع كل تعديل بسيط.
+  /// رفع محتوى الملفات (blobs) عبر تجزئة base64 في مجموعة فرعية، مع دعم
+  /// الملفات الكبيرة بتقسيمها على عدة مستندات (multi) لتجاوز حد مستند
+  /// Firestore (~1 م.ب) — والتخطّي فقط لما يتجاوز حد المزامنة الأعلى
+  /// (50 م.ب) أو غير المتغيّر (بمقارنة بصمة FNV) حتى لا يُرفع من جديد.
   static Future<void> _pushBlobs(String uid) async {
     try {
       final files = await LocalDb.listFiles();
@@ -418,14 +442,15 @@ class SyncStore {
         hashes[name] = hash;
       }
       await LocalDb.kvPut(hashKey, hashes);
-      // حذف أرشيف السحابة لأي ملف لم يعد موجوداً محلياً.
+      // حذف أرشيف السحابة لأي ملف لم يعد موجوداً محلياً (يتضمن أجزاء multi).
       final existing = await FirebaseFirestore.instance
           .collection(_collection)
           .doc(uid)
           .collection('blobs')
           .get();
       for (final doc in existing.docs) {
-        if (!localNames.contains(doc.id)) {
+        final baseName = doc.id.split('#').first;
+        if (!localNames.contains(baseName)) {
           await doc.reference.delete();
         }
       }
@@ -435,24 +460,47 @@ class SyncStore {
   static Future<void> _uploadBlob(
       String uid, String name, List<int> bytes) async {
     final b64 = base64Encode(bytes);
-    final segments = <String, String>{};
-    var idx = 0;
+    final ref = FirebaseFirestore.instance
+        .collection(_collection)
+        .doc(uid)
+        .collection('blobs');
+    // حذف أي أرشيف سابق لنفس الملف (دليل أو أجزاء) قبل إعادة الكتابة.
+    try {
+      final prev = await ref.get();
+      for (final doc in prev.docs) {
+        if (doc.id == name || doc.id.startsWith('$name#')) {
+          await doc.reference.delete();
+        }
+      }
+    } catch (_) {}
+
+    if (b64.length <= _partChars) {
+      // ملف صغير: مستند واحد بالصيغة القديمة (متوافق مع الأجهزة السابقة).
+      await ref.doc(name).set({
+        'segments': {'0': b64},
+        'count': 1,
+        'size': bytes.length,
+        'filename': name,
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    // ملف كبير: وثيقة دليل + أجزاء في مستندات مستقلة، لأن مستند Firestore
+    // الواحد محدود بحوالي 1 م.ب — وهذا ما كان يُسقط رفع الملفات الكبيرة.
     var n = 0;
+    var idx = 0;
     while (idx < b64.length) {
-      final end = (idx + _segmentChars) < b64.length
-          ? idx + _segmentChars
-          : b64.length;
-      segments['$n'] = b64.substring(idx, end);
+      final end = (idx + _partChars) < b64.length ? idx + _partChars : b64.length;
+      await ref.doc('$name#$n').set({
+        'file': name,
+        'part': n,
+        's': b64.substring(idx, end),
+      });
       idx = end;
       n++;
     }
-    await FirebaseFirestore.instance
-        .collection(_collection)
-        .doc(uid)
-        .collection('blobs')
-        .doc(name)
-        .set({
-      'segments': segments,
+    await ref.doc(name).set({
+      'multi': true,
       'count': n,
       'size': bytes.length,
       'filename': name,
