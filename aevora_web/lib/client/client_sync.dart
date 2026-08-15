@@ -44,6 +44,25 @@ class SyncStore {
   // كل جزء من الملف الكبير يُخزن في مستند مستقل ≤ _partChars حرف base64
   // (≈ 300KB) ليبقى مستند Firestore الواحد بعيداً عن حد 1MB.
   static const _partChars = 300000;
+  // شواهد القبور (tombstones): أسماء الملفات التي حذفها المستخدم محلياً ولم
+  // تصل حذوفاتها للسحابة بعد — تمنع السحب من إحياء ملف مُحذوف على هذا الجهاز.
+  static const _deletedKey = 'deleted_files';
+
+  static Future<Set<String>> _deletedNames() async {
+    final v = await LocalDb.kvGetValue(_deletedKey);
+    if (v is List) return v.map((e) => e.toString()).toSet();
+    return <String>{};
+  }
+
+  static Future<void> _addDeletedName(String name) async {
+    final set = await _deletedNames();
+    set.add(name);
+    await LocalDb.kvPut(_deletedKey, set.toList());
+  }
+
+  static Future<void> _clearDeletedNames() async {
+    await LocalDb.kvDelete(_deletedKey);
+  }
 
   /// يُستدعى بعد تطبيق حالة قادمة من السحابة (لإعادة تحميل المفاتيح في الواجهة).
   static void Function()? onStateApplied;
@@ -221,19 +240,26 @@ class SyncStore {
   }
 
   /// تطبيق الملفات وشرائح البحث القادمة من السحابة للملفات غير الموجودة محلياً
-  /// (الملفات المحلية تبقى هي المصدر وتُرفع هي نفسها).
+  /// (الملفات المحلية تبقى هي المصدر وتُرفع هي نفسها). لا يعيد أبداً ملفاً
+  /// حذفه المستخدم محلياً مؤخراً (شاهد قبر) حتى لو بقي في السحابة لحين
+  /// اكتمال مزامنة الحذف.
   static Future<void> _applyCloudFiles(Map<String, dynamic> data) async {
     try {
       final local = await LocalDb.listFiles();
       final localNames = {
         for (final f in local) (f['name'] ?? f['id']).toString(),
       };
+      final deleted = await _deletedNames();
 
       final files = data['files'];
       if (files is List) {
         for (final f in files.whereType<Map>()) {
           final name = (f['name'] ?? f['id']).toString();
-          if (name.isEmpty || localNames.contains(name)) continue;
+          if (name.isEmpty ||
+              deleted.contains(name) ||
+              localNames.contains(name)) {
+            continue;
+          }
           final preview = (f['textPreview'] ?? '').toString();
           await LocalDb.saveFileMeta({
             'id': name,
@@ -252,7 +278,11 @@ class SyncStore {
         final byFile = <String, List<Map<String, dynamic>>>{};
         for (final c in chunks.whereType<Map>()) {
           final name = (c['file'] ?? '').toString();
-          if (name.isEmpty || localNames.contains(name)) continue;
+          if (name.isEmpty ||
+              deleted.contains(name) ||
+              localNames.contains(name)) {
+            continue;
+          }
           byFile.putIfAbsent(name, () => []).add(Map<String, dynamic>.from(c));
         }
         for (final e in byFile.entries) {
@@ -341,9 +371,11 @@ class SyncStore {
   }
 
   /// رفع فوري للحالة الكاملة (يُستخدم عند تسجيل الخروج وقبل الإغلاق).
-  static Future<void> pushNow() async {
+  /// يرجع true إن حُدِّثت السحابة فعلاً (للمزامنات الحرجة كالحذف).
+  static Future<bool> pushNow() async {
     _debounce?.cancel();
-    if (!_active) return;
+    if (!_active) return false;
+    var pushed = false;
     try {
       final state = await _collectLocalState();
       // دمج المحادثة مع ما هو موجود فعلاً في السحابة قبل الكتابة: أي رفع من
@@ -367,8 +399,26 @@ class SyncStore {
         ...state,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      pushed = true;
     } catch (_) {}
     await _pushBlobs(_user!.uid);
+    // بعد نجاح رفع الحالة الكاملة أصبحت السحابة مطابقة للمحلي، فلم يعد هناك
+    // أي ملف محذوف متبقٍ في السحابة — نمسح شواهد القبور حتى لا تُحجب ملفات
+    // أُعيد رفعها لاحقاً بنفس الاسم.
+    if (pushed) await _clearDeletedNames();
+    return pushed;
+  }
+
+  /// حذف ملف نهائياً من الجهاز ثم مزامنة الحذف فوراً مع السحابة.
+  /// يرجع true إن اكتملت مزامنة الحذف على السحابة.
+  static Future<bool> deleteFileEverywhere(String filename) async {
+    await LocalDb.deleteFile(filename);
+    await LocalDb.clearChunksForFile(filename);
+    await _addDeletedName(filename);
+    final ok = await pushNow();
+    // لو فشل الرفع تُبقى شاهد القبر ليمنع السحب من إحياء الملف هنا،
+    // ويُحذف الشاهد تلقائياً بعد نجاح أي رفع لاحق.
+    return ok;
   }
 
   static Future<Map<String, dynamic>> _collectLocalState() async {

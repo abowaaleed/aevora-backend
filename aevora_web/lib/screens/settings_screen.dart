@@ -8,6 +8,7 @@ import '../client/client_upload.dart';
 import '../client/client_usage.dart';
 import '../config.dart';
 import '../legal_content.dart';
+import '../widgets/rtl.dart';
 import '../widgets/upload_progress_dialog.dart';
 import 'consents_screen.dart';
 import 'document_screen.dart';
@@ -463,6 +464,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Text(
               'الصوت الاحترافي من Gemini TTS (نموذج تجريبي بحدود يومية أضيق من '
               'المحادثة) بمفتاحك؛ عند استنفادها يتحول النطق تلقائياً لصوت المتصفح.',
+              textAlign: TextAlign.right,
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
             ),
             const SizedBox(height: 12),
@@ -485,6 +487,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               '«في الدقيقة» (RPM) و«في اليوم» (RPD): فخطأ الازدحام المؤقت «high '
               'demand» من Gemini يظهر رغم بقاء الحصة اليومية ولا يعني نفادها — '
               'انتظر دقيقة وأعد المحاولة.',
+              textAlign: TextAlign.right,
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.6),
             ),
             const SizedBox(height: 8),
@@ -513,38 +516,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : ratio >= 0.6
             ? Colors.orange
             : const Color(0xFF81C784);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(iconKind == 'mic' ? Icons.mic : Icons.auto_awesome,
-                color: const Color(0xFF81C784), size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(label,
-                  style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ),
-            Text('$used / $limit',
-                style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: ratio.clamp(0.0, 1.0),
-            minHeight: 8,
-            backgroundColor: Colors.white10,
-            valueColor: AlwaysStoppedAnimation(color),
+    return Rtl(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(iconKind == 'mic' ? Icons.mic : Icons.auto_awesome,
+                  color: const Color(0xFF81C784), size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(color: Colors.white, fontSize: 13)),
+              ),
+              Text('$used / $limit',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          rpm > 0 ? 'حتى $rpm طلبات/دقيقة · المتبقي اليوم: $remaining' : '',
-          style: TextStyle(color: Colors.white38, fontSize: 11),
-        ),
-      ],
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: ratio.clamp(0.0, 1.0),
+              minHeight: 8,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation(color),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            rpm > 0 ? 'حتى $rpm طلبات/دقيقة · المتبقي اليوم: $remaining' : '',
+            style: TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+        ],
+      ),
     );
   }
 
@@ -562,43 +567,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : ratio >= 0.6
             ? Colors.orange
             : const Color(0xFF81C784);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.record_voice_over_rounded,
-                color: Color(0xFF81C784), size: 18),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text('النطق الاحترافي (صوت ايفورا)',
-                  style: TextStyle(color: Colors.white, fontSize: 13)),
-            ),
-            Text(
-              premium ? '$used حرف' : '$used / $limit حرف',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: premium ? 1.0 : ratio.clamp(0.0, 1.0),
-            minHeight: 8,
-            backgroundColor: Colors.white10,
-            valueColor: AlwaysStoppedAnimation(
-                premium ? const Color(0xFF81C784) : color),
+    return Rtl(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.record_voice_over_rounded,
+                  color: Color(0xFF81C784), size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('النطق الاحترافي (صوت ايفورا)',
+                    style: TextStyle(color: Colors.white, fontSize: 13)),
+              ),
+              Text(
+                premium ? '$used حرف' : '$used / $limit حرف',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          premium
-              ? 'بلا حدود (خطتك «${PlanStore.current.value.label}»)· $requests طلب اليوم'
-              : 'المتبقي اليوم: $remaining حرف · $requests طلب',
-          style: const TextStyle(color: Colors.white38, fontSize: 11),
-        ),
-      ],
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: premium ? 1.0 : ratio.clamp(0.0, 1.0),
+              minHeight: 8,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation(
+                  premium ? const Color(0xFF81C784) : color),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            premium
+                ? 'بلا حدود (خطتك «${PlanStore.current.value.label}»)· $requests طلب اليوم'
+                : 'المتبقي اليوم: $remaining حرف · $requests طلب',
+            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+        ],
+      ),
     );
   }
 
@@ -613,48 +620,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final ratio = count / quota.maxFiles;
         final nearLimit = !plan.isPremium && ratio >= 0.8;
         final color = nearLimit ? Colors.orangeAccent : const Color(0xFF81C784);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.folder_outlined,
-                    color: Color(0xFF81C784), size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'المستندات: $count من ${quota.maxFiles} · '
-                    '${_sizeLabel(bytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
-                    style: TextStyle(
-                        color: nearLimit ? Colors.orangeAccent : Colors.white,
-                        fontSize: 13),
-                  ),
-                ),
-                if (!plan.isPremium)
-                  InkWell(
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                          builder: (_) => const SubscriptionScreen()),
+        return Rtl(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.folder_outlined,
+                      color: Color(0xFF81C784), size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'المستندات: $count من ${quota.maxFiles} · '
+                      '${_sizeLabel(bytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
+                      style: TextStyle(
+                          color: nearLimit ? Colors.orangeAccent : Colors.white,
+                          fontSize: 13),
                     ),
-                    child: const Text('ترقية',
-                        style: TextStyle(
-                            color: Color(0xFF81C784),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700)),
                   ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(
-                value: ratio.clamp(0.0, 1.0),
-                minHeight: 8,
-                backgroundColor: Colors.white10,
-                valueColor: AlwaysStoppedAnimation(color),
+                  if (!plan.isPremium)
+                    InkWell(
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const SubscriptionScreen()),
+                      ),
+                      child: const Text('ترقية',
+                          style: TextStyle(
+                              color: Color(0xFF81C784),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: ratio.clamp(0.0, 1.0),
+                  minHeight: 8,
+                  backgroundColor: Colors.white10,
+                  valueColor: AlwaysStoppedAnimation(color),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );

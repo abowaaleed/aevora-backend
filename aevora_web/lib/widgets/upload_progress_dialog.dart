@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../client/client_plan.dart';
 import '../client/client_upload.dart';
 import '../screens/subscription_screen.dart';
+import 'rtl.dart';
 
 /// رفع ملفات عبر نافذة تقدم واحدة:
 /// 1) فحص حدود الخطة (الحجم/العدد/المساحة) — عند تجاوزها تُفتح نافذة ترقية.
@@ -44,6 +45,11 @@ Future<UploadResult?> showUploadFlow(
     barrierDismissible: false,
     builder: (_) => _UploadProgressDialog(progress: progress),
   ));
+
+  // مهلة قصيرة قبل بدء العمل الثقيل (قراءة/فك ضغط PDF) حتى ترسم النافذة
+  // أول إطار لها — وإلا بدأ العمل فجمدت الواجهة قبل ظهور الشريط أصلاً
+  // (يحدث على أجهزة أبطأ كالآيفون) فيبدو وكأن الشريط لم يظهر إطلاقاً.
+  await Future<void>.delayed(const Duration(milliseconds: 120));
 
   UploadResult result;
   try {
@@ -91,6 +97,7 @@ Future<void> _showUpgradePrompt(
       ),
       content: Text(
         message,
+        textDirection: TextDirection.rtl,
         textAlign: TextAlign.right,
         style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.7),
       ),
@@ -166,63 +173,69 @@ class _UploadProgressDialogState extends State<_UploadProgressDialog> {
       child: Dialog(
         backgroundColor: const Color(0xFF141A2A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: Padding(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.upload_file_rounded, color: Color(0xFF4CAF50)),
-                  SizedBox(width: 10),
-                  Text(
-                    'رفع المستندات',
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (p.filename.isNotEmpty)
-                Text(
-                  p.filename,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              const SizedBox(height: 10),
-              LinearProgressIndicator(
-                value: progressValue,
-                minHeight: 8,
-                borderRadius: BorderRadius.circular(6),
-                backgroundColor: Colors.white10,
-                valueColor: const AlwaysStoppedAnimation(Color(0xFF4CAF50)),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      p.stage,
-                      style: const TextStyle(
-                          color: Colors.white54, fontSize: 12),
-                    ),
-                  ),
-                  if (p.fileCount > 1)
+        child: Rtl(
+          child: Padding(
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.upload_file_rounded, color: Color(0xFF4CAF50)),
+                    SizedBox(width: 10),
                     Text(
-                      '${p.fileIndex} / ${p.fileCount}',
-                      style: const TextStyle(
-                          color: Colors.white54, fontSize: 12),
+                      'رفع المستندات',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700),
                     ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'لا تغلق الصفحة أثناء الرفع — الملفات تُقرأ وتُفهرس محلياً على جهازك.',
-                style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (p.filename.isNotEmpty)
+                  Text(
+                    p.filename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                const SizedBox(height: 10),
+                LinearProgressIndicator(
+                  value: progressValue,
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(6),
+                  backgroundColor: Colors.white10,
+                  valueColor: const AlwaysStoppedAnimation(Color(0xFF4CAF50)),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        p.stage,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                    ),
+                    if (p.fileCount > 1)
+                      Text(
+                        '${p.fileIndex} / ${p.fileCount}',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'لا تغلق الصفحة أثناء الرفع — الملفات تُقرأ وتُفهرس محلياً '
+                  'على جهازك. قد يستغرق الملف الكبير (10 م.ب فأكثر) عدة دقائق '
+                  'فقط لا أكثر.',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                      color: Colors.white38, fontSize: 11, height: 1.6),
+                ),
+              ],
+            ),
           ),
         ),
       ),

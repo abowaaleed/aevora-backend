@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../client/client_plan.dart';
 import '../client/client_voice.dart';
+import 'rtl.dart';
 
 /// شريط التحكم بصوت ايفورا: يظهر أسفل الشاشة أثناء التشغيل ويوفّر
 /// إيقافاً مؤقتاً، استئنافاً، وإيقافاً كاملاً — ويعرض سبب تحول النطق
@@ -164,9 +165,11 @@ class _TtsCounter extends StatelessWidget {
                 : 'صوت ايفورا: $chars / ${c.ttsCharsLimit.value} حرف اليوم';
             return Padding(
               padding: const EdgeInsets.only(top: 3),
-              child: Text(
-                caption,
-                style: const TextStyle(color: Colors.white38, fontSize: 10),
+              child: Rtl(
+                child: Text(
+                  caption,
+                  style: const TextStyle(color: Colors.white38, fontSize: 10),
+                ),
               ),
             );
           },

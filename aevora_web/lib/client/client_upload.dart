@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 
 import 'client_plan.dart';
@@ -131,6 +133,8 @@ Future<UploadResult> uploadAndIndexFiles({
         stage: 'قراءة الملف...',
         fraction: doneBase,
       ));
+      // دع الواجهة ترسم «قراءة الملف...» قبل قراءة الملف الكبير.
+      await Future<void>.delayed(const Duration(milliseconds: 16));
       final bytes = await f.readAsBytes();
       if (bytes.isEmpty) {
         throw Exception('تعذّرت قراءة الملف «${f.name}» — جرّب رفعه مرة أخرى.');

@@ -29,12 +29,17 @@ const acceptedFormatsLabel = 'الصيغ المدعومة: PDF · Word (.docx) �
 /// استخراج النص محلياً (بدون أي خادم) من:
 /// PDF / Word (.docx) / TXT / صور (OCR على الويب).
 /// الصيغ المدعومة للرفع: pdf, docx, txt, png, jpg, jpeg, gif, bmp, webp.
-Future<String> extractText(String filename, List<int> bytes) async {
+/// [onPage] يُستدعى بعد كل صفحة PDF (رقم الصفحة، الإجمالي) لتحديث الواجهة.
+Future<String> extractText(
+  String filename,
+  List<int> bytes, {
+  void Function(int page, int total)? onPage,
+}) async {
   final name = filename.toLowerCase();
   final ext = name.contains('.') ? name.split('.').last : '';
 
   if (name.endsWith('.txt')) return decodeTextFile(bytes);
-  if (name.endsWith('.pdf')) return _extractPdfText(bytes);
+  if (name.endsWith('.pdf')) return _extractPdfText(bytes, onPage: onPage);
   if (name.endsWith('.docx')) return docxToText(bytes);
   if (name.endsWith('.doc')) {
     throw Exception(
@@ -57,7 +62,14 @@ Future<String> extractText(String filename, List<int> bytes) async {
 /// استخراج نص PDF مع إعادة بناء اتجاه القراءة للعربية (RTL):
 /// نجمع الحروف بترتيب مواضعها الأفقية الحقيقية (ترتيب بصري) ثم
 /// نحوّلها إلى الترتيب المنطقي الصحيح عبر `visualToLogical`.
-Future<String> _extractPdfText(List<int> bytes) async {
+///
+/// العملية ثقيلة على ملفات كبيرة، لذلك نُطلق حلقة الأحداث (await) بعد كل
+/// صفحة — وإلا تجمّدت الواجهة تماماً وظل شريط التقدم «عالقاً» دون رسم.
+Future<String> _extractPdfText(
+  List<int> bytes, {
+  void Function(int page, int total)? onPage,
+}) async {
+  await Future<void>.delayed(const Duration(milliseconds: 16));
   final doc = PdfDocument(inputBytes: Uint8List.fromList(bytes));
   try {
     final extractor = PdfTextExtractor(doc);
@@ -65,6 +77,8 @@ Future<String> _extractPdfText(List<int> bytes) async {
     final sb = StringBuffer();
 
     for (var p = 0; p < pageCount; p++) {
+      onPage?.call(p + 1, pageCount);
+      await Future<void>.delayed(const Duration(milliseconds: 1));
       final lines =
           extractor.extractTextLines(startPageIndex: p, endPageIndex: p);
       for (final line in lines) {
@@ -194,9 +208,18 @@ Future<void> indexLocalFile(
   void Function(double fraction, String stage)? onProgress,
 }) async {
   onProgress?.call(0.02, 'استخراج النص من الملف...');
-  final raw = await extractText(filename, bytes);
+  // إتاحة فرصة للواجهة لرسم المرحلة قبل بدء العمل الثقيل (فك ضغط PDF ...)
+  // وإلا بقي الشريط «عالقاً» لأن خيط الواجهة مشغول بالمعالجة.
+  await Future<void>.delayed(const Duration(milliseconds: 16));
+  final raw = await extractText(filename, bytes, onPage: (page, total) {
+    onProgress?.call(
+      0.02 + 0.58 * (page / total),
+      'استخراج النص من الـ PDF... الصفحة $page من $total',
+    );
+  });
   final text = raw.length > _maxFileText ? raw.substring(0, _maxFileText) : raw;
   onProgress?.call(0.65, 'حفظ الملف محلياً...');
+  await Future<void>.delayed(const Duration(milliseconds: 16));
 
   await LocalDb.saveFileMeta({
     'id': filename,
@@ -222,7 +245,15 @@ Future<void> indexLocalFile(
       'text': chunks[i],
       'vec': embedText(chunks[i]),
     });
-    onProgress?.call(0.65 + 0.35 * ((i + 1) / chunks.length), 'فهرسة النص للبحث...');
+    // تحديث الشريط كل بضعة شرائح (وليس كل واحدة) مع إطلاق حلقة الأحداث
+    // حتى لا يتكدّس الرسم وتظل الواجهة سريعة أثناء الفهرسة.
+    if (i % 4 == 0 || i == chunks.length - 1) {
+      onProgress?.call(
+        0.65 + 0.35 * ((i + 1) / chunks.length),
+        'فهرسة النص للبحث (${i + 1} من ${chunks.length})...',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
   }
   onProgress?.call(1.0, 'اكتمل');
 }

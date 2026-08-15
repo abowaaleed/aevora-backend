@@ -6,6 +6,7 @@ import '../client/client_rag.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
+import '../widgets/rtl.dart';
 import '../widgets/upload_progress_dialog.dart';
 import 'subscription_screen.dart';
 
@@ -161,14 +162,56 @@ class _DocumentScreenState extends State<DocumentScreen> {
   }
 
   Future<void> _delete(_DocItem item) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141A2A),
+        title: const Text('حذف المستند',
+            style: TextStyle(color: Colors.white, fontSize: 17)),
+        content: Text(
+          'سيُحذف «${item.filename}» نهائياً من جهازك ومن كل أجهزتك المزامنة بحسابك.',
+          textDirection: TextDirection.rtl,
+          textAlign: TextAlign.right,
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف نهائياً'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
     try {
-      await LocalDb.deleteFile(item.filename);
-      await LocalDb.clearChunksForFile(item.filename);
-      SyncStore.schedulePush();
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('جارٍ حذف الملف ومزامنة الحذف مع كل أجهزتك...'),
+        duration: Duration(seconds: 20),
+      ));
+      final ok = await SyncStore.deleteFileEverywhere(item.filename);
       await _load();
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+          ok
+              ? 'تم حذف «${item.filename}» من جهازك وكل أجهزتك.'
+              : 'حُذف الملف من جهازك، لكن مزامنة الحذف مع السحابة لم تكتمل — '
+                  'أعد المحاولة عند اتصال أفضل ولن يعود الملف.',
+          textDirection: TextDirection.rtl,
+        ),
+      ));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('خطأ: $e')));
     }
   }
 
@@ -194,47 +237,51 @@ class _DocumentScreenState extends State<DocumentScreen> {
           width: double.infinity,
           color: const Color(0xFF0D1422),
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: Row(
-            children: [
-              Icon(Icons.folder_outlined, color: color, size: 20),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'مستنداتك: $count من ${quota.maxFiles} · '
-                      'مساحة ${_sizeLabel(_storageBytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
-                      style: TextStyle(
-                        color: nearLimit ? Colors.orangeAccent : Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+          child: Rtl(
+            child: Row(
+              children: [
+                Icon(Icons.folder_outlined, color: color, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'مستنداتك: $count من ${quota.maxFiles} · '
+                        'مساحة ${_sizeLabel(_storageBytes)} من ${_sizeLabel(quota.maxStorageBytes)}',
+                        style: TextStyle(
+                          color: nearLimit
+                              ? Colors.orangeAccent
+                              : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: ratio.clamp(0.0, 1.0),
-                        minHeight: 5,
-                        backgroundColor: Colors.white10,
-                        valueColor: AlwaysStoppedAnimation(color),
+                      const SizedBox(height: 5),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: ratio.clamp(0.0, 1.0),
+                          minHeight: 5,
+                          backgroundColor: Colors.white10,
+                          valueColor: AlwaysStoppedAnimation(color),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!plan.isPremium)
-                TextButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => const SubscriptionScreen()),
+                    ],
                   ),
-                  icon: const Icon(Icons.workspace_premium_outlined, size: 16),
-                  label: const Text('ترقية',
-                      style: TextStyle(fontSize: 12)),
                 ),
-            ],
+                if (!plan.isPremium)
+                  TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                          builder: (_) => const SubscriptionScreen()),
+                    ),
+                    icon: const Icon(Icons.workspace_premium_outlined, size: 16),
+                    label: const Text('ترقية',
+                        style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
           ),
         );
       },
