@@ -32,6 +32,9 @@ extension type SpeechSynthesis(JSObject _) implements JSObject {
   external void pause();
   external void resume();
   external JSArray<SpeechSynthesisVoice> getVoices();
+  external bool get speaking;
+  external JSFunction? get onvoiceschanged;
+  external set onvoiceschanged(JSFunction? v);
 }
 
 extension type SpeechSynthesisUtterance._(JSObject _) implements JSObject {
@@ -44,6 +47,8 @@ extension type SpeechSynthesisUtterance._(JSObject _) implements JSObject {
   external set rate(double v);
   external double get pitch;
   external set pitch(double v);
+  external double get volume;
+  external set volume(double v);
   external JSFunction? get onend;
   external set onend(JSFunction? v);
   external JSFunction? get onerror;
@@ -61,7 +66,146 @@ extension type SpeechSynthesisEvent(JSObject _) implements JSObject {
 
 bool get isBrowserSpeechSupported => speechSynthesis != null;
 
+/// هل المتصفح من فئة iOS (سفاري/كروم/فايرفوكس على iPhone/iPad)؟
+/// iOS يحتاج تفعيل محرك النطق داخل إيماءة مستخدم، وإلا كان الصوت صامتاً.
+bool get _isIos {
+  try {
+    final ua = web.window.navigator.userAgent.toLowerCase();
+    return ua.contains('iphone') ||
+        ua.contains('ipad') ||
+        ua.contains('ipod');
+  } catch (_) {
+    return false;
+  }
+}
+
+/// ذاكرة مؤقتة لأصوات المتصفح: في iOS/Safari قائمة [getVoices] تصل فارغة
+/// ثم تُملأ بعد حدث `voiceschanged` — نحفظها لنستعملها في اختيار الصوت.
+List<SpeechSynthesisVoice> _voiceCache = const [];
+bool _speechInited = false;
+
+void _initBrowserSpeech() {
+  if (_speechInited) return;
+  _speechInited = true;
+  final synth = speechSynthesis;
+  if (synth == null) return;
+  synth.onvoiceschanged = ((JSObject _) {
+    try {
+      _voiceCache = synth.getVoices().toDart;
+    } catch (_) {}
+  }).toJS;
+  try {
+    _voiceCache = synth.getVoices().toDart;
+  } catch (_) {}
+}
+
+/// انتظار تحميل قائمة الأصوات (iOS/Safari تُملأ بعد `voiceschanged`)
+/// مع مهلة قصيرة ثم المتابعة بأي قائمة متاحة.
+Future<void> _ensureVoices(SpeechSynthesis synth) async {
+  if (_voiceCache.isNotEmpty) return;
+  try {
+    _voiceCache = synth.getVoices().toDart;
+  } catch (_) {}
+  if (_voiceCache.isNotEmpty) return;
+  final completer = Completer<void>();
+  final previous = synth.onvoiceschanged;
+  synth.onvoiceschanged = ((JSObject _) {
+    if (!completer.isCompleted) {
+      try {
+        _voiceCache = synth.getVoices().toDart;
+      } catch (_) {}
+      completer.complete();
+    }
+  }).toJS;
+  try {
+    await completer.future.timeout(const Duration(milliseconds: 1500));
+  } catch (_) {}
+  synth.onvoiceschanged = previous;
+}
+
+/// اختيار أفضل صوت للغة المطلوبة: تطابق تام، ثم نفس اللغة الأساسية (ar/en)؛
+/// وإن لم يوجد صوت للغة نُركه للمتصفح (دون تعيين voice) ليبحث بنفسه.
+SpeechSynthesisVoice? _pickBestVoice(String lang) {
+  final voices = _voiceCache;
+  if (voices.isEmpty) return null;
+  final exact = lang.toLowerCase();
+  final base = lang.split('-').first.toLowerCase();
+  SpeechSynthesisVoice? fallback;
+  for (final v in voices) {
+    final l = v.lang.toLowerCase();
+    if (l == exact) return v;
+    if (fallback == null && l.startsWith(base)) fallback = v;
+  }
+  return fallback;
+}
+
+/// تفعيل محرك نطق المتصفح داخل إيماءة المستخدم: في iOS يُشغَّل الصوت فقط
+/// بعد تفاعل مباشر، لذا نُطلق جملة صامتة (volume=0) لفك الحجب — وإلا كان
+/// كل كلام لاحق صامتاً (خاصة في كروم/سفاري على iPhone).
+void _primeBrowserSpeech() {
+  final synth = speechSynthesis;
+  if (synth == null) return;
+  try {
+    if (synth.speaking) return;
+    synth.cancel();
+    final u = SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    u.lang = 'ar-SA';
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    synth.speak(u);
+  } catch (_) {}
+}
+
+/// تقسيم النص الطويل إلى مقاطع قصيرة: بعض المتصفحات (iOS) توقف الكلام
+/// أو تلغيه بعد فترة، فالنطق على دفعات يضمن إكمال الجملة كاملة.
+List<String> _speechChunks(String text, {int maxChars = 180}) {
+  final t = text.trim();
+  if (t.isEmpty) return const [];
+  if (t.length <= maxChars) return [t];
+  final parts = t
+      .split(RegExp(r'[.!?؟،:؛\n]+\s*'))
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+  final chunks = <String>[];
+  var buf = StringBuffer();
+  void flush() {
+    if (buf.isNotEmpty) {
+      chunks.add(buf.toString().trim());
+      buf = StringBuffer();
+    }
+  }
+
+  for (final p in parts) {
+    if (p.length > maxChars) {
+      flush();
+      var rest = p;
+      while (rest.length > maxChars) {
+        chunks.add(rest.substring(0, maxChars));
+        rest = rest.substring(maxChars);
+      }
+      if (rest.isNotEmpty) buf.write(rest);
+    } else if (buf.length + p.length + 1 > maxChars) {
+      flush();
+      buf.write(p);
+    } else {
+      if (buf.isNotEmpty) buf.write(' ');
+      buf.write(p);
+    }
+  }
+  flush();
+  return chunks.isEmpty ? [t] : chunks;
+}
+
+Duration _speechTimeout(String chunk) {
+  final seconds = (10 + chunk.length ~/ 12).clamp(20, 90);
+  return Duration(seconds: seconds);
+}
+
 /// نطق النص صوتياً عبر المتصفح (مجاني، متعدد اللغات، بدون خادم).
+/// يعمل على كل المتصفحات بما فيها iOS: ينتظر تحميل الأصوات، يختار
+/// الأنسب للغة، ويقسّم النص الطويل إلى مقاطع حتى لا يُقطع الكلام.
 Future<void> speakText(
   String text, {
   double rate = 1.0,
@@ -72,39 +216,48 @@ Future<void> speakText(
     throw Exception('نطق الصوت غير مدعوم في هذا المتصفح');
   }
   _activeEngine = SpeechEngine.browser;
+  _initBrowserSpeech();
   synth.cancel();
 
   final lang = detectLang(text);
-  final utterance = SpeechSynthesisUtterance(text);
-  utterance.lang = lang;
-  utterance.rate = rate;
-  utterance.pitch = 1.0;
+  await _ensureVoices(synth);
+  final voice = _pickBestVoice(lang);
 
-  try {
-    final voices = synth.getVoices().toDart;
-    if (voices.isNotEmpty) {
-      final match = voices.firstWhere(
-        (v) => v.lang.toLowerCase() == lang.toLowerCase(),
-        orElse: () => voices.firstWhere(
-          (v) => v.lang.toLowerCase().startsWith(lang.split('-').first),
-          orElse: () => voices.first,
-        ),
-      );
-      utterance.voice = match;
+  var started = false;
+  for (final chunk in _speechChunks(text)) {
+    if (_activeEngine != SpeechEngine.browser) return;
+    final completer = Completer<void>();
+    final utterance = SpeechSynthesisUtterance(chunk);
+    utterance.lang = lang;
+    utterance.rate = rate;
+    utterance.pitch = 1.0;
+    if (voice != null) {
+      try {
+        utterance.voice = voice;
+      } catch (_) {}
     }
-  } catch (_) {}
+    utterance.onend = ((SpeechSynthesisEvent _) {
+      if (!completer.isCompleted) completer.complete();
+    }).toJS;
+    utterance.onerror = ((SpeechSynthesisEvent _) {
+      if (!completer.isCompleted) completer.complete();
+    }).toJS;
 
-  final completer = Completer<void>();
-  utterance.onend = ((SpeechSynthesisEvent _) {
-    if (!completer.isCompleted) completer.complete();
-  }).toJS;
-  utterance.onerror = ((SpeechSynthesisEvent _) {
-    if (!completer.isCompleted) completer.complete();
-  }).toJS;
-
-  synth.speak(utterance);
-  onStart?.call();
-  await completer.future.timeout(const Duration(seconds: 60), onTimeout: () {});
+    synth.speak(utterance);
+    if (!started) {
+      started = true;
+      onStart?.call();
+    }
+    // معالجة خلل iOS الشهير: استدعاء pause/resume فوراً بعد speak يمنع
+    // صمت الكلام الطويل في سفاري/كروم على iPhone.
+    if (_isIos) {
+      try {
+        synth.pause();
+        synth.resume();
+      } catch (_) {}
+    }
+    await completer.future.timeout(_speechTimeout(chunk), onTimeout: () {});
+  }
   _activeEngine = SpeechEngine.none;
 }
 
@@ -126,7 +279,8 @@ web.AudioContext _ensureAudioContext() {
 }
 
 /// يُستدعى عند أي تفاعل مستخدم (إرسال/تسجيل) لإنشاء سياق الصوت داخل إيماءة
-/// المستخدم حتى لا يُحجب التشغيل المتدفق لاحقاً بسياسة التشغيل التلقائي.
+/// المستخدم حتى لا يُحجب التشغيل المتدفق لاحقاً بسياسة التشغيل التلقائي،
+/// ولفك حجب نطق المتصفح في iOS (بدون تفاعل مباشر لا يصدر صوت أبداً).
 void warmUpAudio() {
   try {
     final ctx = _ensureAudioContext();
@@ -134,6 +288,8 @@ void warmUpAudio() {
       unawaited(ctx.resume().toDart);
     }
   } catch (_) {}
+  _initBrowserSpeech();
+  _primeBrowserSpeech();
 }
 
 void _stopStreamPlayback() {

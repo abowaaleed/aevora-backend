@@ -1,14 +1,26 @@
 import 'package:flutter/material.dart';
 
+import '../client/client_plan.dart';
 import '../client/client_voice.dart';
 
 /// شريط التحكم بصوت ايفورا: يظهر أسفل الشاشة أثناء التشغيل ويوفّر
 /// إيقافاً مؤقتاً، استئنافاً، وإيقافاً كاملاً — ويعرض سبب تحول النطق
-/// إلى صوت المتصفح الأساسي إن حدث.
-class VoiceControlBar extends StatelessWidget {
+/// إلى صوت المتصفح الأساسي إن حدث، مع عدّاد أحرف النطق الاحترافي اليوم.
+class VoiceControlBar extends StatefulWidget {
   const VoiceControlBar({super.key});
 
+  @override
+  State<VoiceControlBar> createState() => _VoiceControlBarState();
+}
+
+class _VoiceControlBarState extends State<VoiceControlBar> {
   static const _green = Color(0xFF4CAF50);
+
+  @override
+  void initState() {
+    super.initState();
+    PlaybackController.instance.refreshTtsCounter();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +78,7 @@ class VoiceControlBar extends StatelessWidget {
                         style: const TextStyle(color: Colors.white54, fontSize: 11),
                       ),
                     ],
+                    const _TtsCounter(),
                     ValueListenableBuilder<String?>(
                       valueListenable: c.fallbackNotice,
                       builder: (context, notice, _) {
@@ -124,6 +137,39 @@ class VoiceControlBar extends StatelessWidget {
               ),
             ],
           ),
+        );
+      },
+    );
+  }
+}
+
+/// عدّاد أحرف النطق الاحترافي المنطوقة اليوم (X / 3000)،
+/// يُعرض بلا حد للمشتركين «مميز/مُدارة».
+class _TtsCounter extends StatelessWidget {
+  const _TtsCounter();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PlaybackController.instance;
+    return ValueListenableBuilder<PlanState>(
+      valueListenable: PlanStore.current,
+      builder: (context, plan, _) {
+        final premium = plan.isPremium;
+        return ValueListenableBuilder<int>(
+          valueListenable: c.todayTtsChars,
+          builder: (context, chars, _) {
+            final unlimited = premium || chars >= c.ttsCharsLimit.value;
+            final caption = unlimited
+                ? 'صوت ايفورا: $chars حرف اليوم'
+                : 'صوت ايفورا: $chars / ${c.ttsCharsLimit.value} حرف اليوم';
+            return Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                caption,
+                style: const TextStyle(color: Colors.white38, fontSize: 10),
+              ),
+            );
+          },
         );
       },
     );

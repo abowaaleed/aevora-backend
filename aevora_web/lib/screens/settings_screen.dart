@@ -458,22 +458,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _usageRow('mic', 'التعرف على الصوت (Whisper عبر Groq)',
                 u['stt_groq'] as Map<String, dynamic>?),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.record_voice_over_rounded,
-                    color: Color(0xFF81C784), size: 18),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text('النطق الاحترافي (صوت ايفورا)',
-                      style: TextStyle(color: Colors.white, fontSize: 13)),
-                ),
-                Text(
-                  '${(u['tts']?['requests'] as num?)?.toInt() ?? 0} طلب · '
-                  '${(u['tts']?['chars'] as num?)?.toInt() ?? 0} حرف',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ),
+            _ttsCharsRow(u['tts'] as Map<String, dynamic>?),
             const SizedBox(height: 4),
             const Text(
               'الصوت الاحترافي من Gemini TTS (نموذج تجريبي بحدود يومية أضيق من '
@@ -556,6 +541,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text(
           rpm > 0 ? 'حتى $rpm طلبات/دقيقة · المتبقي اليوم: $remaining' : '',
           style: TextStyle(color: Colors.white38, fontSize: 11),
+        ),
+      ],
+    );
+  }
+
+  /// صف النطق الاحترافي بعدّاد أحرف وبار تقدم مقابل الحد المجاني اليومي
+  /// (بلا حدود لمشتركي «مميز/مُدارة»).
+  Widget _ttsCharsRow(Map<String, dynamic>? tts) {
+    final used = (tts?['chars'] as num?)?.toInt() ?? 0;
+    final requests = (tts?['requests'] as num?)?.toInt() ?? 0;
+    final limit = PlanStore.freeProfessionalTtsCharsPerDay;
+    final premium = PlanStore.current.value.isPremium;
+    final remaining = (limit - used).clamp(0, limit);
+    final ratio = limit > 0 ? used / limit : 0.0;
+    final color = ratio >= 0.9
+        ? Colors.redAccent
+        : ratio >= 0.6
+            ? Colors.orange
+            : const Color(0xFF81C784);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.record_voice_over_rounded,
+                color: Color(0xFF81C784), size: 18),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('النطق الاحترافي (صوت ايفورا)',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+            ),
+            Text(
+              premium ? '$used حرف' : '$used / $limit حرف',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: premium ? 1.0 : ratio.clamp(0.0, 1.0),
+            minHeight: 8,
+            backgroundColor: Colors.white10,
+            valueColor: AlwaysStoppedAnimation(
+                premium ? const Color(0xFF81C784) : color),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          premium
+              ? 'بلا حدود (خطتك «${PlanStore.current.value.label}»)· $requests طلب اليوم'
+              : 'المتبقي اليوم: $remaining حرف · $requests طلب',
+          style: const TextStyle(color: Colors.white38, fontSize: 11),
         ),
       ],
     );

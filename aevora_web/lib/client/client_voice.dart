@@ -236,7 +236,8 @@ Future<void> speakSmart(
       PlaybackController.instance.fallbackNotice.value =
           'وصلت إلى الحد المجاني اليومي للنطق الاحترافي '
           '(${PlanStore.freeProfessionalTtsCharsPerDay} حرف). '
-          'رقِّ خطتك من «الإعدادات ← الاشتراك والترقية» للاستفادة بلا حدود.';
+          'يعود العدّاد تلقائياً عند منتصف الليل (بتوقيت جهازك)، '
+          'أو رقِّ خطتك من «الإعدادات ← الاشتراك والترقية» للاستفادة بلا حدود.';
     } else {
       try {
         LocalUsage.recordTts(chars: text.trim().length);
@@ -312,9 +313,27 @@ class PlaybackController {
   /// الصوت حتى لا يتفاجأ المستخدم بانخفاض جودة الصوت.
   final ValueNotifier<String?> fallbackNotice = ValueNotifier<String?>(null);
 
+  /// عدد أحرف النطق الاحترافي المنطوقة اليوم (بمفتاح المستخدم) —
+  /// مصدر شريط الصوت وعدّاد الإعدادات، ويتجدد بعد كل نطق.
+  final ValueNotifier<int> todayTtsChars = ValueNotifier<int>(0);
+
+  /// حد اليوم المجاني للنطق الاحترافي (بلا حدود لمشتركي «مميز/مُدارة»).
+  final ValueNotifier<int> ttsCharsLimit =
+      ValueNotifier<int>(PlanStore.freeProfessionalTtsCharsPerDay);
+
   int _token = 0;
 
   bool get isActive => status.value != PlaybackStatus.idle;
+
+  /// تحديث عدّاد أحرف النطق الاحترافي من السجل المحلي (يُستدعى بعد النطق
+  /// وعند ظهور شريط الصوت).
+  Future<void> refreshTtsCounter() async {
+    try {
+      final t = await LocalUsage.today();
+      final tts = t['tts'];
+      todayTtsChars.value = ((tts is Map ? tts['chars'] : null) as num?)?.toInt() ?? 0;
+    } catch (_) {}
+  }
 
   /// تشغيل النص صوتياً. إن كان نفس النص (نفس [messageId]) قيد التشغيل
   /// يُوقَف التشغيل كاملاً — لتلائم سلوك زر الفقاعة (تشغيل/إيقاف).
@@ -342,6 +361,7 @@ class PlaybackController {
         if (token == _token) status.value = PlaybackStatus.speaking;
       });
     } catch (_) {}
+    unawaited(refreshTtsCounter());
     if (token == _token) {
       status.value = PlaybackStatus.idle;
       activeId.value = null;
