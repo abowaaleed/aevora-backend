@@ -27,6 +27,7 @@ class SyncStore {
   static const _collection = 'users';
 
   static Timer? _debounce;
+  static Timer? _retryTimer;
   static User? _user;
   static StreamSubscription<User?>? _sub;
   static Completer<void>? _ready;
@@ -48,6 +49,15 @@ class SyncStore {
   // تصل حذوفاتها للسحابة بعد — تمنع السحب من إحياء ملف مُحذوف على هذا الجهاز.
   static const _deletedKey = 'deleted_files';
 
+  /// مفاتيح شواهد القبور **السحابية** داخل مستند المستخدم (خريطة اسم→وقت):
+  /// تُكتب فور الحذف بكتابة صغيرة مستقلة حتى يعرفها كل جهاز (حتى الجديد
+  /// أول مرة) حتى لو فشلت دفعة الحالة الكاملة، وتُحذف بعد نجاح رفع كامل
+  /// يطابق السحابة بالمحلي.
+  static const _deletedCloudKey = 'deletedFiles';
+
+  /// هل رصدنا حذوفات سحابية معلّقة (تُعاد المحاولة تلقائياً حتى تُنظَّف).
+  static bool _cloudTombstonesPending = false;
+
   static Future<Set<String>> _deletedNames() async {
     final v = await LocalDb.kvGetValue(_deletedKey);
     if (v is List) return v.map((e) => e.toString()).toSet();
@@ -62,6 +72,14 @@ class SyncStore {
 
   static Future<void> _clearDeletedNames() async {
     await LocalDb.kvDelete(_deletedKey);
+  }
+
+  /// أسماء الملفات المحذوفة في السحابة نفسها (خريطة `deletedFiles` في مستند
+  /// المستخدم) — يعرفها أي جهاز يسحبها، بخلاف شواهد القبور المحلية.
+  static Set<String> _cloudDeletedNames(Map<String, dynamic> data) {
+    final raw = data[_deletedCloudKey];
+    if (raw is Map) return raw.keys.map((e) => e.toString()).toSet();
+    return <String>{};
   }
 
   /// يُستدعى بعد تطبيق حالة قادمة من السحابة (لإعادة تحميل المفاتيح في الواجهة).
@@ -111,10 +129,22 @@ class SyncStore {
       // عند مغادرة/إخفاء الصفحة (تحويل تبويب/إغلاق) نرفع أي مفتاح لم يُرفع بعد
       // حتى لا يضيع عند التبديل بين الأجهزة.
       web_lifecycle.attachLifecycleFlush(flushIfSession);
+      // إعادة محاولة تلقائية لمزامنة الحذوفات المعلّقة حتى مع الانقطاعات.
+      startDeleteRetryTimer();
     } catch (_) {
       _user = null;
       _ready = null;
     }
+  }
+
+  /// مؤقّت دوري يعيد محاولة رفع الحذوفات المعلّقة (محلية أو سحابية) حتى
+  /// تُنظَّف من السحابة دون تدخل المستخدم. التكلفة: لا يقرأ السحابة إلا
+  /// عندما يكون هناك حذف معلّق فعلاً.
+  static void startDeleteRetryTimer() {
+    _retryTimer?.cancel();
+    _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_retryPendingSync());
+    });
   }
 
   /// يُستدعى عند بدء التطبيق: إذا كانت هناك جلسة سابقة يُسحب البيانات قبل عرض
@@ -195,9 +225,15 @@ class SyncStore {
       await _applyCloudFiles(data);
     } catch (_) {}
     // أبلغ شاشة المحادثة أن المحادثة المحلية تغيّرت من السحابة حتى تعيد
-    // قراءتها وتُحدّث رسائلها (نظام الاشتراك وحده لم يُحدث الواجهة).
+    // قراءتها وتُحدّث رسائلها (نظام الاشتراك وحده لم يُحدّث الواجهة).
     chatReloadTick.value++;
     cloudAppliedTick.value++;
+    // إن رصدنا حذوفات سحابية معلّقة (حذف من جهاز آخر لم يُنظَّف بعد) نُحرّك
+    // رفعاً يُنظّفها من السحابة على هذا الجهاز أيضاً.
+    if (_cloudDeletedNames(data).isNotEmpty) {
+      _cloudTombstonesPending = true;
+      schedulePush();
+    }
     try {
       onStateApplied?.call();
     } catch (_) {}
@@ -257,6 +293,7 @@ class SyncStore {
         for (final f in local) (f['name'] ?? f['id']).toString(),
       };
       final deleted = await _deletedNames();
+      deleted.addAll(_cloudDeletedNames(data));
 
       final files = data['files'];
       if (files is List) {
@@ -323,6 +360,10 @@ class SyncStore {
       final localNames = {
         for (final f in local) (f['name'] ?? f['id']).toString(),
       };
+      // لا نسحب محتوى أي ملف محذوف (محلياً أو سحابياً) — حتى لو بقي أرشيفه
+      // في السحابة لحين اكتمال تنظيفه، فلا يُستعاد على أي جهاز.
+      final deleted = await _deletedNames();
+      if (data != null) deleted.addAll(_cloudDeletedNames(data));
       final cloudDocs = await FirebaseFirestore.instance
           .collection(_collection)
           .doc(uid)
@@ -331,7 +372,11 @@ class SyncStore {
       final docsById = {for (final d in cloudDocs.docs) d.id: d};
       for (final doc in cloudDocs.docs) {
         final name = doc.id;
-        if (name.isEmpty || localNames.contains(name)) continue;
+        if (name.isEmpty ||
+            localNames.contains(name) ||
+            deleted.contains(name)) {
+          continue;
+        }
         final d = doc.data();
         final isMulti = d['multi'] == true;
         if (isMulti) {
@@ -410,22 +455,94 @@ class SyncStore {
     } catch (_) {}
     await _pushBlobs(_user!.uid);
     // بعد نجاح رفع الحالة الكاملة أصبحت السحابة مطابقة للمحلي، فلم يعد هناك
-    // أي ملف محذوف متبقٍ في السحابة — نمسح شواهد القبور حتى لا تُحجب ملفات
-    // أُعيد رفعها لاحقاً بنفس الاسم.
-    if (pushed) await _clearDeletedNames();
+    // أي ملف محذوف متبقٍ في السحابة — نمسح شواهد القبور (المحلية والسحابية)
+    // حتى لا تُحجب ملفات أُعيد رفعها لاحقاً بنفس الاسم.
+    if (pushed) {
+      await _clearDeletedNames();
+      _cloudTombstonesPending = false;
+      await _pruneCloudTombstones();
+    }
     return pushed;
   }
 
-  /// حذف ملف نهائياً من الجهاز ثم مزامنة الحذف فوراً مع السحابة.
-  /// يرجع true إن اكتملت مزامنة الحذف على السحابة.
+  /// حذف ملف نهائياً من الجهاز ثم مزامنة الحذف فوراً مع كل الأجهزة.
+  /// يكتب أولاً شاهد قبر في السحابة (كتابة صغيرة مستقلة) حتى تعرف كل الأجهزة
+  /// بالحذف حتى لو فشلت دفعة الحالة الكاملة، ثم يدفع الحالة كاملة.
+  /// يرجع true إن اكتملت أي مزامنة فعلية للحذف على السحابة.
   static Future<bool> deleteFileEverywhere(String filename) async {
     await LocalDb.deleteFile(filename);
     await LocalDb.clearChunksForFile(filename);
     await _addDeletedName(filename);
+    final cloudTombstoneOk = await _writeCloudTombstones([filename]);
     final ok = await pushNow();
-    // لو فشل الرفع تُبقى شاهد القبر ليمنع السحب من إحياء الملف هنا،
-    // ويُحذف الشاهد تلقائياً بعد نجاح أي رفع لاحق.
-    return ok;
+    // لو فشل الرفع تُبقى شواهد القبر (محلياً وسحابياً) لتمنع السحب من إحياء
+    // الملف في أي جهاز، وتُحذف تلقائياً بعد نجاح أي رفع لاحق.
+    return ok || cloudTombstoneOk;
+  }
+
+  /// حذف مجموعة ملفات نهائياً من الجهاز ثم مزامنة الحذف مع كل الأجهزة بدفعة
+  /// واحدة (شواهد قبور سحابية + رفع كامل) — أسرع وأخف من الحذف ملفاً ملفاً.
+  static Future<bool> deleteAllEverywhere(List<String> filenames) async {
+    for (final n in filenames) {
+      await LocalDb.deleteFile(n);
+      await LocalDb.clearChunksForFile(n);
+      await _addDeletedName(n);
+    }
+    final cloudTombstoneOk = await _writeCloudTombstones(filenames);
+    final ok = await pushNow();
+    return ok || cloudTombstoneOk;
+  }
+
+  /// كتابة صغيرة مستقلة لشواهد قبور في السحابة (خريطة اسم→وقت داخل مستند
+  /// المستخدم) — تنجح حتى لو فشلت دفعة الحالة الكاملة بعدها.
+  static Future<bool> _writeCloudTombstones(List<String> names) async {
+    if (!_active || names.isEmpty) return false;
+    try {
+      final tombstones = <String, Object>{
+        for (final n in names) n: DateTime.now().millisecondsSinceEpoch,
+      };
+      await FirebaseFirestore.instance
+          .collection(_collection)
+          .doc(_user!.uid)
+          .set({_deletedCloudKey: tombstones}, SetOptions(merge: true));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// حذف شواهد القبور السحابية بعد تأكيد أن السحابة لم تعد تحوي الملفات
+  /// المحذوفة (بعد رفع كامل ناجح يجعل `files` مطابقاً للمحلي).
+  static Future<void> _pruneCloudTombstones() async {
+    if (!_active) return;
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection(_collection)
+          .doc(_user!.uid);
+      final cloud = await ref.get(const GetOptions(source: Source.server));
+      final data = cloud.data();
+      if (data == null) return;
+      final names = _cloudDeletedNames(data);
+      if (names.isEmpty) return;
+      final updates = <String, Object>{};
+      for (final n in names) {
+        updates['$_deletedCloudKey.$n'] = FieldValue.delete();
+      }
+      await ref.update(updates);
+    } catch (_) {}
+  }
+
+  /// إعادة محاولة تلقائية لمزامنة الحذف كل فترة قصيرة ما دامت هناك حذوفات
+  /// معلّقة (محلية أو سحابية) — حتى تلتقي السحابة مع الأجهزة بعد أي انقطاع
+  /// دون تدخل المستخدم، ولا تُعاد الملفات المحذوفة على أي جهاز.
+  static Future<void> _retryPendingSync() async {
+    if (!_active) return;
+    try {
+      final local = await _deletedNames();
+      if (local.isEmpty && !_cloudTombstonesPending) return;
+      final ok = await pushNow();
+      if (ok) _cloudTombstonesPending = false;
+    } catch (_) {}
   }
 
   static Future<Map<String, dynamic>> _collectLocalState() async {

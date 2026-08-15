@@ -228,8 +228,8 @@ class _UploadProgressDialogState extends State<_UploadProgressDialog> {
                 const SizedBox(height: 10),
                 const Text(
                   'لا تغلق الصفحة أثناء الرفع — الملفات تُقرأ وتُفهرس محلياً '
-                  'على جهازك. قد يستغرق الملف الكبير (10 م.ب فأكثر) عدة دقائق '
-                  'فقط لا أكثر.',
+                  'على جهازك. الملفات الممسوحة ضوئياً تُعالج بالتعرف الضوئي '
+                  '(OCR) وقد يستغرق الملف الكبير عدة دقائق.',
                   textAlign: TextAlign.right,
                   style: TextStyle(
                       color: Colors.white38, fontSize: 11, height: 1.6),

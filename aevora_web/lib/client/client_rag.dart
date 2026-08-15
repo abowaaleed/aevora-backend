@@ -5,6 +5,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import 'client_ocr.dart' as ocr;
 import 'client_storage.dart';
+import 'pdf_ocr.dart' as pdf_ocr;
 import 'text_arabic.dart';
 import 'text_files.dart';
 
@@ -130,8 +131,19 @@ Future<String> _extractPdfText(
 
     final result = sb.toString().trim();
     if (result.isEmpty && pageCount > 0) {
+      // ملف ممسوح ضوئياً (صور صفحات بلا نص قابل للاستخراج): نرسم كل صفحة
+      // ونتعرف عليها نصياً عبر OCR داخل المتصفح ليصبح النص قابلاً للبحث
+      // في المحادثة. لو تعذّر (غير مدعوم/بلا إنترنت) نعطي رسالة واضحة.
+      String? ocrText;
+      try {
+        ocrText = await pdf_ocr.ocrPdfImages(bytes, pageCount, onPage: onPage);
+      } catch (_) {
+        ocrText = null;
+      }
+      if (ocrText != null && ocrText.trim().isNotEmpty) return ocrText.trim();
       throw Exception(
-          'هذا الملف يبدو ممسوحاً ضوئياً (صور فقط) ولا يحتوي نصاً قابلاً للاستخراج. يمكنك رفع الصور مباشرة.');
+          'هذا الملف يبدو ممسوحاً ضوئياً (صور فقط) ولم يتعرّف OCR على نص فيه. '
+          'يمكنك رفع صور الصفحات مباشرة.');
     }
     return result;
   } finally {
@@ -214,7 +226,7 @@ Future<void> indexLocalFile(
   final raw = await extractText(filename, bytes, onPage: (page, total) {
     onProgress?.call(
       0.02 + 0.58 * (page / total),
-      'استخراج النص من الـ PDF... الصفحة $page من $total',
+      'قراءة الصفحة $page من $total...',
     );
   });
   final text = raw.length > _maxFileText ? raw.substring(0, _maxFileText) : raw;

@@ -4,7 +4,7 @@ const String appName = 'ايفورا';
 
 /// نسخة التطبيق الظاهرة في «الإعدادات» — تُرفَع يدوياً مع كل إصدار جديد
 /// ليتمكن المستخدم من التحقق أن النسخة المنشورة قد تغيّرت.
-const String appVersion = '1.4.2';
+const String appVersion = '1.4.3';
 
 class KeySettings {
   final String geminiKey;

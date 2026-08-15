@@ -15,7 +15,7 @@ void main() {
   group('PlanQuota', () {
     test('free plan quota is limited', () {
       expect(freePlanQuota.maxFiles, 5);
-      expect(freePlanQuota.maxFileSizeBytes, 10 * 1024 * 1024);
+      expect(freePlanQuota.maxFileSizeBytes, 50 * 1024 * 1024);
       expect(freePlanQuota.maxStorageBytes, 50 * 1024 * 1024);
       expect(freePlanQuota.isUnlimited, isFalse);
     });

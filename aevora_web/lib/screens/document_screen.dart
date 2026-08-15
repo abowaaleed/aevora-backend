@@ -206,7 +206,65 @@ class _DocumentScreenState extends State<DocumentScreen> {
           ok
               ? 'تم حذف «${item.filename}» من جهازك وكل أجهزتك.'
               : 'حُذف الملف من جهازك، لكن مزامنة الحذف مع السحابة لم تكتمل — '
-                  'أعد المحاولة عند اتصال أفضل ولن يعود الملف.',
+                  'ستُعاد المحاولة تلقائياً ولن يعود الملف.',
+          textDirection: TextDirection.rtl,
+        ),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('خطأ: $e')));
+    }
+  }
+
+  /// حذف جميع المستندات دفعة واحدة من الجهاز ومن كل الأجهزة المزامنة.
+  Future<void> _deleteAll() async {
+    final names = _files.map((f) => f.filename).toList();
+    if (names.isEmpty || _uploading) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141A2A),
+        title: const Text('حذف جميع المستندات',
+            style: TextStyle(color: Colors.white, fontSize: 17)),
+        content: Text(
+          'سيُحذف ${names.length} مستند نهائياً من جهازك ومن كل أجهزتك '
+          'المزامنة بحسابك، ولا يمكن التراجع عن هذا.',
+          textDirection: TextDirection.rtl,
+          textAlign: TextAlign.right,
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف نهائياً'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('جارٍ حذف المستندات ومزامنة الحذف مع كل أجهزتك...'),
+        duration: Duration(seconds: 20),
+      ));
+      final ok = await SyncStore.deleteAllEverywhere(names);
+      await _load();
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+          ok
+              ? 'تم حذف جميع المستندات من جهازك وكل أجهزتك.'
+              : 'حُذفت المستندات من جهازك، لكن مزامنة الحذف مع السحابة لم تكتمل — '
+                  'ستُعاد المحاولة تلقائياً ولن تعود الملفات على أجهزتك.',
           textDirection: TextDirection.rtl,
         ),
       ));
@@ -297,6 +355,13 @@ class _DocumentScreenState extends State<DocumentScreen> {
       appBar: AppBar(
         title: const Text('المستندات'),
         actions: [
+          if (_files.isNotEmpty)
+            IconButton(
+              tooltip: 'حذف جميع المستندات من كل الأجهزة',
+              onPressed: _deleteAll,
+              icon: const Icon(Icons.delete_sweep_outlined),
+              color: Colors.redAccent,
+            ),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh),
