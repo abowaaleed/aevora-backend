@@ -54,6 +54,14 @@ class _DocumentScreenState extends State<DocumentScreen> {
     _load();
   }
 
+  /// «تحديث» من شريط الأعلى: يسحب الحالة كاملة من السحابة ثم يعيد قراءة
+  /// الملفات المحلية — فلا يبقى التحديث محلياً فقط (كان الزر يبدو بلا أثر
+  /// لأنه كان يعيد قراءة IndexedDB المحلية وحدها).
+  Future<void> _refreshFromCloud() async {
+    await SyncStore.pullNow();
+    await _load();
+  }
+
   Future<void> _load() async {
     try {
       final rows = await LocalDb.listFiles();
@@ -363,7 +371,8 @@ class _DocumentScreenState extends State<DocumentScreen> {
               color: Colors.redAccent,
             ),
           IconButton(
-            onPressed: _load,
+            tooltip: 'مزامنة مع السحابة',
+            onPressed: _refreshFromCloud,
             icon: const Icon(Icons.refresh),
           ),
         ],

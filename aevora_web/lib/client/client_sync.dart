@@ -58,6 +58,14 @@ class SyncStore {
   /// هل رصدنا حذوفات سحابية معلّقة (تُعاد المحاولة تلقائياً حتى تُنظَّف).
   static bool _cloudTombstonesPending = false;
 
+  /// مستمع التغييرات اللحظي على مستند المستخدم — يُطبّق أي تغيير قادم من
+  /// الأجهزة الأخرى فور حدوثه (سحب/حذف/رسائل...) دون انتظار إعادة الدخول.
+  static StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _cloudSub;
+
+  /// حماية من الاسترجاع: أثناء رفع محلي (كتابة مستند المستخدم) نتجاهل ما
+  /// يرتد إلينا من المستمع حتى لا نطبّق بياناتنا نحن ونُعيد سحب الملفات.
+  static bool _pushingNow = false;
+
   static Future<Set<String>> _deletedNames() async {
     final v = await LocalDb.kvGetValue(_deletedKey);
     if (v is List) return v.map((e) => e.toString()).toSet();
@@ -115,8 +123,11 @@ class SyncStore {
         _lastAuthUid = uid;
         _user = user;
         if (user != null) {
+          _attachCloudListener(user.uid);
           _pullThenReady(user.uid);
         } else {
+          _cloudSub?.cancel();
+          _cloudSub = null;
           _ready = null;
         }
       }, onError: (_) {
@@ -124,8 +135,6 @@ class SyncStore {
         _user = null;
         _ready = null;
       });
-      // عند مغادرة/إخفاء الصفحة (تحويل تبويب/إغلاق) نرفع أي مفتاح لم يُرفع بعد
-      // حتى لا يضيع عند التبديل بين الأجهزة.
       // عند مغادرة/إخفاء الصفحة (تحويل تبويب/إغلاق) نرفع أي مفتاح لم يُرفع بعد
       // حتى لا يضيع عند التبديل بين الأجهزة.
       web_lifecycle.attachLifecycleFlush(flushIfSession);
@@ -156,8 +165,49 @@ class SyncStore {
       _user = user;
       // منع سحب مزدوج: أول حدث من authStateChanges لنفس المستخدم يُتجاهل.
       _lastAuthUid = user.uid;
+      _attachCloudListener(user.uid);
       _pullThenReady(user.uid);
     }
+  }
+
+  /// ربط مستمع التغييرات اللحظي بمستند `users/{uid}`: أي تعديل قادم من جهاز
+  /// آخر (رفع ملف، حذف، رسالة...) يُطبَّق محلياً فوراً ويرفع الواجهة، دون
+  /// الحاجة لإعادة الدخول أو الضغط على «تحديث». يُلغى القديم عند تبديل الحساب.
+  static void _attachCloudListener(String uid) {
+    _cloudSub?.cancel();
+    try {
+      _cloudSub = FirebaseFirestore.instance
+          .collection(_collection)
+          .doc(uid)
+          .snapshots()
+          .listen(
+        (snap) => unawaited(_onCloudSnapshot(uid, snap)),
+        onError: (_) {},
+      );
+    } catch (_) {}
+  }
+
+  /// تطبيق تغيير لحظي وارد من مستند المستخدم على المحلي، ثم سحب أي ملفات
+  /// جديدة غير موجودة محلياً (بما فيها ملفات رُفعت من جهاز آخر).
+  static Future<void> _onCloudSnapshot(
+      String uid, DocumentSnapshot<Map<String, dynamic>> snap) async {
+    try {
+      // نتجاهل الأصداء الناتجة عن رفعنا المحلي (كتابة معلّقة أو قيد التنفيذ)
+      // فلا نطبّق بياناتنا نحن مرتين ولا نُحدث الواجهة عبثاً.
+      if (_pushingNow || snap.metadata.hasPendingWrites) return;
+      final data = snap.data();
+      if (data == null) return;
+      await _applyToLocal(data);
+      await _pullBlobs(uid, data);
+    } catch (_) {}
+  }
+
+  /// سحب فوري للحالة الكاملة من السحابة وتطبيقها محلياً — يستدعيه زر
+  /// «تحديث» في شاشة المستندات، فلا يبقى التحديث معتمداً على مستمع
+  /// التغييرات اللحظي وحده.
+  static Future<void> pullNow() async {
+    if (!_active) return;
+    await pullFor(_user!.uid);
   }
 
   /// انتظار اكتمال أول سحب (تستدعيه شل قبل بناء الشاشات).
@@ -350,7 +400,8 @@ class SyncStore {
 
   /// سحب محتوى الملفات الخام (blobs) للملفات القادمة من السحابة وغير الموجودة
   /// محلياً، عبر تجزئة base64 مخزنة في مجموعة فرعية لكل حساب — مع دعم
-  /// الملفات الكبيرة المقسّمة على عدة مستندات (multi).
+  /// الملفات الكبيرة المقسّمة على عدة مستندات (multi). يستدعيه السحب الأول
+  /// ومستمع التغييرات اللحظي، لذا يُخرج مبكراً إن لم يظهر ملف جديد.
   static Future<void> _pullBlobs(
       String uid, Map<String, dynamic>? data) async {
     try {
@@ -364,6 +415,19 @@ class SyncStore {
       // في السحابة لحين اكتمال تنظيفه، فلا يُستعاد على أي جهاز.
       final deleted = await _deletedNames();
       if (data != null) deleted.addAll(_cloudDeletedNames(data));
+      // أسماء الملفات الجديدة الفعلية فقط (غير موجودة محلياً وغير محذوفة):
+      // دونها لا حاجة لقراءة مجموعة blobs إطلاقاً، ومستمع التغييرات يمر
+      // كثيراً فيجب أن يكون هذا المسار خفيفاً.
+      final wanted = <String>{};
+      for (final f in files.whereType<Map>()) {
+        final name = (f['name'] ?? f['id']).toString();
+        if (name.isNotEmpty &&
+            !localNames.contains(name) &&
+            !deleted.contains(name)) {
+          wanted.add(name);
+        }
+      }
+      if (wanted.isEmpty) return;
       final cloudDocs = await FirebaseFirestore.instance
           .collection(_collection)
           .doc(uid)
@@ -372,11 +436,7 @@ class SyncStore {
       final docsById = {for (final d in cloudDocs.docs) d.id: d};
       for (final doc in cloudDocs.docs) {
         final name = doc.id;
-        if (name.isEmpty ||
-            localNames.contains(name) ||
-            deleted.contains(name)) {
-          continue;
-        }
+        if (!wanted.contains(name)) continue;
         final d = doc.data();
         final isMulti = d['multi'] == true;
         if (isMulti) {
@@ -427,6 +487,7 @@ class SyncStore {
   static Future<bool> pushNow() async {
     _debounce?.cancel();
     if (!_active) return false;
+    _pushingNow = true;
     var pushed = false;
     try {
       final state = await _collectLocalState();
@@ -452,16 +513,17 @@ class SyncStore {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       pushed = true;
+      await _pushBlobs(_user!.uid);
+      // بعد نجاح رفع الحالة الكاملة أصبحت السحابة مطابقة للمحلي، فلم يعد هناك
+      // أي ملف محذوف متبقٍ في السحابة — نمسح شواهد القبور (المحلية والسحابية)
+      // حتى لا تُحجب ملفات أُعيد رفعها لاحقاً بنفس الاسم.
+      if (pushed) {
+        await _clearDeletedNames();
+        _cloudTombstonesPending = false;
+        await _pruneCloudTombstones();
+      }
     } catch (_) {}
-    await _pushBlobs(_user!.uid);
-    // بعد نجاح رفع الحالة الكاملة أصبحت السحابة مطابقة للمحلي، فلم يعد هناك
-    // أي ملف محذوف متبقٍ في السحابة — نمسح شواهد القبور (المحلية والسحابية)
-    // حتى لا تُحجب ملفات أُعيد رفعها لاحقاً بنفس الاسم.
-    if (pushed) {
-      await _clearDeletedNames();
-      _cloudTombstonesPending = false;
-      await _pruneCloudTombstones();
-    }
+    _pushingNow = false;
     return pushed;
   }
 
@@ -497,6 +559,7 @@ class SyncStore {
   /// المستخدم) — تنجح حتى لو فشلت دفعة الحالة الكاملة بعدها.
   static Future<bool> _writeCloudTombstones(List<String> names) async {
     if (!_active || names.isEmpty) return false;
+    _pushingNow = true;
     try {
       final tombstones = <String, Object>{
         for (final n in names) n: DateTime.now().millisecondsSinceEpoch,
@@ -508,6 +571,8 @@ class SyncStore {
       return true;
     } catch (_) {
       return false;
+    } finally {
+      _pushingNow = false;
     }
   }
 
@@ -515,6 +580,7 @@ class SyncStore {
   /// المحذوفة (بعد رفع كامل ناجح يجعل `files` مطابقاً للمحلي).
   static Future<void> _pruneCloudTombstones() async {
     if (!_active) return;
+    _pushingNow = true;
     try {
       final ref = FirebaseFirestore.instance
           .collection(_collection)
@@ -530,6 +596,9 @@ class SyncStore {
       }
       await ref.update(updates);
     } catch (_) {}
+    finally {
+      _pushingNow = false;
+    }
   }
 
   /// إعادة محاولة تلقائية لمزامنة الحذف كل فترة قصيرة ما دامت هناك حذوفات
