@@ -383,7 +383,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => _isLoading = false);
       unawaited(_speakAuto(reply, messageId: assistant.id));
     } catch (e) {
-      assistant.text = 'خطأ: $e';
+      // رسالة ودّية بدل «خطأ: Exception: ...» التقنية — لا نعرض للمستخدم
+      // نصاً خاماً مخيفاً، بل صياغة لطيفة تناسب طبيعة المحادثة.
+      assistant.text = friendlyError(e);
       if (mounted) setState(() {});
       await _persistMessages();
     } finally {
@@ -415,8 +417,8 @@ class _ChatScreenState extends State<ChatScreen> {
         path: 'evora_voice.wav',
       );
       if (mounted) setState(() => _isListening = true);
-    } catch (e) {
-      _addError('فشل بدء التسجيل: $e');
+    } catch (_) {
+      _addError('تعذّر بدء التسجيل — تحقق من إذن الميكروفون.');
     }
   }
 
@@ -435,14 +437,14 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (mounted) setState(() => _isThinking = false);
       await _send(text);
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _isThinking = false;
           _isListening = false;
         });
       }
-      _addError('خطأ في الصوت: $e');
+      _addError('لم نستطع سماعك هذه المرة، أعد المحاولة.');
     }
   }
 

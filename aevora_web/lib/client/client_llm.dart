@@ -182,3 +182,45 @@ String _extractError(String body, int status) {
   if (raw.isNotEmpty) return raw;
   return 'فشل الاتصال بـ Gemini ($status)';
 }
+
+/// تحويل أي خطأ قادم من المحادثة إلى رسالة ودّية مهذّبة تُعرض للمستخدم بدل
+/// النص التقني الخام («خطأ: Exception: ...»). تُعيد صياغة المشكلة بأسلوب
+/// لطيف غير مخيف مع الحفاظ على جوهر المعلومة (مثلاً: الحصة اليومية تتجدد
+/// عند منتصف الليل).
+String friendlyError(Object error) {
+  final msg = error.toString().replaceFirst('Exception: ', '').trim();
+  final low = msg.toLowerCase();
+
+  // الحصة اليومية: أخطر المزعجة — تُصاغ ببساطة وألفة كأنه «نهاية رحلة اليوم».
+  if (low.contains('استُنفدت حصة') ||
+      low.contains('resource has been exhausted') ||
+      (low.contains('quota') && low.contains('day'))) {
+    return 'وصلنا معاً إلى آخر حديث اليوم، وكان وقتاً جميلاً. لا تقلق — '
+        'الحصة تتجدد تلقائياً بعد منتصف الليل بإذن الله، ونكمل من حيث توقفنا.';
+  }
+  if (low.contains('تجاوزت حد الطلبات في الدقيقة') ||
+      low.contains('requests per minute') ||
+      low.contains('rpm')) {
+    return 'واو، رسائل متلاحقة! هدّئ السرعة قليلاً وأعد المحاولة خلال دقيقة.';
+  }
+  if (low.contains('مزدحمة') ||
+      low.contains('high demand') ||
+      low.contains('429')) {
+    return 'خدمة الذكاء الاصطناعي مشغولة قليلاً هذه اللحظة. انتظر لحظات '
+        'وأعد المحاولة — سنكمل حديثنا فوراً.';
+  }
+  if (low.contains('مفتاح') &&
+      (low.contains('غير صالح') ||
+          low.contains('محذوف') ||
+          low.contains('غير مضبوط'))) {
+    return 'يبدو أن مفتاح Gemini يحتاج إلى تحديث بسيط — أضِفه أو حدّثه من '
+        'الإعدادات وسنكمل حديثنا فوراً.';
+  }
+  if (low.contains('لم يصل رد')) {
+    return 'لم يصل الرد هذه المرة، أعد المحاولة خلال لحظات.';
+  }
+  if (msg.isEmpty || low.contains('exception')) {
+    return 'حدث أمر غير متوقع... أعد المحاولة خلال لحظات.';
+  }
+  return 'آسف، تعثّر الرد هذه المرة. أعد المحاولة خلال لحظات.';
+}
