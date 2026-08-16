@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../client/client_auth.dart';
+import '../client/client_llm.dart';
 import '../client/client_plan.dart';
 import '../client/client_rag.dart';
 import '../client/client_sync.dart';
@@ -48,13 +49,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     SyncStore.cloudAppliedTick.addListener(_onCloudData);
+    activeChatEngine.addListener(_onEngineChanged);
     _loadUsage();
   }
 
   @override
   void dispose() {
     SyncStore.cloudAppliedTick.removeListener(_onCloudData);
+    activeChatEngine.removeListener(_onEngineChanged);
     super.dispose();
+  }
+
+  /// تغيّر المحرك النشط (جيميناي ← Groq أو العكس) — تُحدَّث النقطة الخضراء.
+  void _onEngineChanged() {
+    if (mounted) setState(() {});
   }
 
   /// بيانات (عدادات/ملفات) وصلت من السحابة بعد بناء الشاشة — أعد التحميل
@@ -467,8 +475,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-          _usageRow('chat', 'محادثة ايفورا (Gemini)',
-              u['gemini'] as Map<String, dynamic>?),
+          _usageRow('chat', 'طلبات Gemini اليوم (محادثة وتحليلات خلفية)',
+              u['gemini'] as Map<String, dynamic>?,
+              active: activeChatEngine.value == ChatEngine.gemini),
+            const SizedBox(height: 14),
+            _usageRow('bolt', 'دردشة Groq الاحتياطية (Llama)',
+                u['groq_chat'] as Map<String, dynamic>?,
+                active: activeChatEngine.value == ChatEngine.groq),
             const SizedBox(height: 14),
             _usageRow('mic', 'التعرف على الصوت (Whisper عبر Groq)',
                 u['stt_groq'] as Map<String, dynamic>?),
@@ -476,9 +489,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ttsCharsRow(u['tts'] as Map<String, dynamic>?),
             const SizedBox(height: 4),
             const Text(
-              'الصوت الاحترافي من Gemini TTS (نموذج تجريبي بحدود يومية أضيق من '
-              'المحادثة) بمفتاحك؛ عند استنفادها أو تعذّره يتحول النطق تلقائياً '
-              'وَبلا انقطاع إلى صوت إيدج الاحترافي المجاني، ثم إلى صوت المتصفح إن لزم.',
+              'النطق الاحترافي في خطتك «المجانية» يعمل عبر صوت إيدج الطبيعي '
+              'المجاني — بلا حدود ولا يستهلك حصة Gemini؛ وعند تعذره يتحول '
+              'تلقائياً إلى صوت المتصفح. النطق المتقدم عبر Gemini TTS مخصص '
+              'لخطط «مميز/مُدارة».',
               textAlign: TextAlign.right,
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.5),
             ),
@@ -497,11 +511,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _documentsRow(),
             const SizedBox(height: 10),
             const Text(
-              'هذه عدّادات تقريبية على جهازك ولا تعكس بالضرورة حصة المزود الفعلية '
-              'التي تفرضها Google/Groq وقد تتغير. الطلبات تُحسب يومياً على كل من '
-              '«في الدقيقة» (RPM) و«في اليوم» (RPD): فخطأ الازدحام المؤقت «high '
-              'demand» من Gemini يظهر رغم بقاء الحصة اليومية ولا يعني نفادها — '
-              'انتظر دقيقة وأعد المحاولة.',
+              'كيف يُحسب الطلب؟ كل طلب = استدعاء واحد لواجهة Gemini: رسالة '
+              'محادثة واحدة، أو تحليل خلفي تلقائي (مرة كل بضع رسائل)، أو رسالة '
+              'المساعد — ليس لكل كلمة. العدادات هنا على جهازك، والحصة الفعلية '
+              'يفرضها المزوّد على مفتاحك ومشروعك وقد تتقاسمها تطبيقات أخرى بنفس '
+              'المفتاح. أخطاء «في الدقيقة» (RPM) تزول خلال دقيقة، وأخطاء '
+              '«الازدحام المؤقت» تزول خلال دقائق — ولا تعني نفاد حصتك اليومية. '
+              'وعند تعذّر Gemini تماماً تنتقل المحادثة تلقائياً وبصمت إلى Groq '
+              'إن وُجد مفتاحها، فالتطبيق لا يتوقف أبداً.',
               textAlign: TextAlign.right,
               style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.6),
             ),
@@ -520,7 +537,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _usageRow(String iconKind, String label, Map<String, dynamic>? data) {
+  Widget _usageRow(String iconKind, String label, Map<String, dynamic>? data,
+      {bool active = false}) {
     final used = (data?['used'] as num?)?.toInt() ?? 0;
     final limit = (data?['limit'] as num?)?.toInt() ?? 0;
     final remaining = (data?['remaining'] as num?)?.toInt() ?? 0;
@@ -537,13 +555,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           Row(
             children: [
-              Icon(iconKind == 'mic' ? Icons.mic : Icons.auto_awesome,
-                  color: const Color(0xFF81C784), size: 18),
+              Icon(iconKind == 'mic'
+                  ? Icons.mic
+                  : iconKind == 'bolt'
+                      ? Icons.bolt
+                      : Icons.auto_awesome,
+                  color: const Color(0xFF81C784),
+                  size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(label,
                     style: const TextStyle(color: Colors.white, fontSize: 13)),
               ),
+              if (active) ...[
+                const SizedBox(width: 6),
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4CAF50),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF4CAF50).withValues(alpha: 0.9),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 4),
+              ],
               Text('$used / $limit',
                   style: const TextStyle(color: Colors.white70, fontSize: 12)),
             ],
@@ -571,17 +613,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// صف النطق الاحترافي بعدّاد أحرف وبار تقدم مقابل الحد المجاني اليومي
   /// (بلا حدود لمشتركي «مميز/مُدارة»).
   Widget _ttsCharsRow(Map<String, dynamic>? tts) {
+    final premium = PlanStore.current.value.isPremium;
+    if (!premium) {
+      // الخطة المجانية: صوت إيدج الاحترافي مجاني وبلا حدود ولا يستهلك حصة Gemini.
+      return Rtl(
+        child: Row(
+          children: [
+            const Icon(Icons.record_voice_over_rounded,
+                color: Color(0xFF81C784), size: 18),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('النطق الاحترافي (صوت إيدج)',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+            ),
+            Text('مجاني · بلا حدود',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ],
+        ),
+      );
+    }
     final used = (tts?['chars'] as num?)?.toInt() ?? 0;
     final requests = (tts?['requests'] as num?)?.toInt() ?? 0;
-    final limit = PlanStore.freeProfessionalTtsCharsPerDay;
-    final premium = PlanStore.current.value.isPremium;
-    final remaining = (limit - used).clamp(0, limit);
-    final ratio = limit > 0 ? used / limit : 0.0;
-    final color = ratio >= 0.9
-        ? Colors.redAccent
-        : ratio >= 0.6
-            ? Colors.orange
-            : const Color(0xFF81C784);
     return Rtl(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -596,7 +648,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(color: Colors.white, fontSize: 13)),
               ),
               Text(
-                premium ? '$used حرف' : '$used / $limit حرف',
+                '$used حرف',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ],
@@ -605,18 +657,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: LinearProgressIndicator(
-              value: premium ? 1.0 : ratio.clamp(0.0, 1.0),
+              value: 1.0,
               minHeight: 8,
               backgroundColor: Colors.white10,
-              valueColor: AlwaysStoppedAnimation(
-                  premium ? const Color(0xFF81C784) : color),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFF81C784)),
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            premium
-                ? 'بلا حدود (خطتك «${PlanStore.current.value.label}»)· $requests طلب اليوم'
-                : 'المتبقي اليوم: $remaining حرف · $requests طلب',
+            'بلا حدود (خطتك «${PlanStore.current.value.label}»)· $requests طلب اليوم',
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
         ],

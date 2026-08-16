@@ -395,10 +395,11 @@ bool edgeIsTurnEnd(String message) => message.contains('Path: turn.end');
 /// المستخدم حتى لا يُحجب التشغيل بسياسة التشغيل التلقائي (المتصفح).
 void warmUpAudio() => voice_platform.warmUpAudio();
 
-/// نطق النص: يفضّل النطق الاحترافي المتدفق من Gemini (إن وُجد المفتاح
-/// وضمن الحصة اليومية)، ثم صوت إيدج الاحترافي المجاني (بلا أي مفتاح)، ثم
-/// صوت المتصفح الأساسي المحسّن — مع تحويل صامت وسلس بينها بلا رسائل خطأ.
-/// خطة «مميز/مُدارة» ترفع الحد اليومي للنطق الاحترافي إلى اللانهاية.
+/// نطق النص: الخطة «المجانية» تستخدم صوت إيدج الاحترافي المجاني أساساً
+/// (بلا أي مفتاح وبلا حدود وبلا استهلاك لحصة Gemini — فالنطق عبر Gemini TTS
+/// كان يستهلك نفس الحصة اليومية للمحادثة فيتوقف الحديث مبكراً). خطة
+/// «مميز/مُدارة» تستخدم النطق الاحترافي المتدفق من Gemini بلا حدود ثم إيدج
+/// ثم صوت المتصفح — بتحويل صامت وسلس بينها وبلا أي رسالة خطأ.
 Future<void> speakSmart(
   String text, {
   String? apiKey,
@@ -408,21 +409,14 @@ Future<void> speakSmart(
   final hasKey = apiKey != null && apiKey.trim().isNotEmpty;
   final premium = PlanStore.current.value.isPremium;
 
-  // الدرجة الأولى: النطق الاحترافي المتدفق من Gemini.
-  if (hasKey) {
-    if (premium) {
-      if (await _tryProfessional(text, apiKey, rate, onStart)) return;
-    } else {
-      final used = (await LocalUsage.today())['tts'];
-      final usedChars = (used is Map ? used['chars'] : null) as num? ?? 0;
-      if (usedChars < PlanStore.freeProfessionalTtsCharsPerDay &&
-          await _tryProfessional(text, apiKey, rate, onStart)) {
-        return;
-      }
-    }
+  // الدرجة الأولى (للمشتركين فقط): النطق الاحترافي المتدفق من Gemini —
+  // مجاني، بلا حدود، ولا يمس حصة المحادثة اليومية.
+  if (hasKey && premium) {
+    if (await _tryProfessional(text, apiKey, rate, onStart)) return;
   }
 
-  // الدرجة الثانية: صوت إيدج الاحترافي المجاني (أصوات طبيعية، بلا مفتاح).
+  // الدرجة الثانية: صوت إيدج الاحترافي المجاني (أصوات طبيعية، بلا مفتاح،
+  // بلا حدود) — هو النطق الأساسي للخطة المجانية.
   try {
     await voice_platform.speakEdgeTts(text, rate: rate, onStart: onStart);
     return;
@@ -442,6 +436,7 @@ Future<void> speakSmart(
 }
 
 /// محاولة النطق الاحترافي عبر Gemini؛ ترجع true إن نجح التشغيل.
+/// يُسجَّل الاستهلاك بعد النجاح فقط (المحاولات المرفوضة لا تُحسب).
 Future<bool> _tryProfessional(
   String text,
   String apiKey,
@@ -449,9 +444,9 @@ Future<bool> _tryProfessional(
   void Function()? onStart,
 ) async {
   try {
-    LocalUsage.recordTts(chars: text.trim().length);
     await voice_platform.speakProfessionalStreaming(text,
         apiKey: apiKey, rate: rate, onStart: onStart);
+    LocalUsage.recordTts(chars: text.trim().length);
     return true;
   } catch (_) {
     voice_platform.stopPlaybackNow();

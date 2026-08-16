@@ -359,7 +359,9 @@ class _ChatScreenState extends State<ChatScreen> {
         for (final m in trimmed) ClientMsg(m.isUser ? 'user' : 'model', m.text),
       ];
 
-      final reply = await geminiStreamChat(
+    String reply;
+    try {
+      reply = await geminiStreamChat(
         apiKey: widget.keys.geminiKey,
         messages: msgs,
         system: system,
@@ -369,7 +371,27 @@ class _ChatScreenState extends State<ChatScreen> {
           _scrollToBottom();
         },
       );
-      assistant.text = reply;
+      activeChatEngine.value = ChatEngine.gemini;
+    } catch (e) {
+      // الربط السلس مع Groq: إذا تعذّر Gemini (نفاد حصة/ازدحام/خطأ) ووُجد
+      // مفتاح Groq، تنتقل المحادثة إليه تلقائياً وبصمت — التطبيق لا يتوقف.
+      // إن كان Gemini قد بدأ الرد جزئياً ثم انقطع، نمسح الجزء قبل التحويل.
+      final groqKey = widget.keys.groqKey.trim();
+      if (groqKey.isEmpty) rethrow;
+      assistant.text = '';
+      reply = await groqChatStream(
+        apiKey: groqKey,
+        messages: msgs,
+        system: system,
+        onChunk: (partial) {
+          assistant.text += partial;
+          if (mounted) setState(() {});
+          _scrollToBottom();
+        },
+      );
+      activeChatEngine.value = ChatEngine.groq;
+    }
+    assistant.text = reply;
       if (mounted) setState(() {});
       _scrollToBottom();
       await _persistMessages();
@@ -625,6 +647,7 @@ class _ChatScreenState extends State<ChatScreen> {
               spacing: 8,
               runSpacing: 6,
               children: [
+                _engineChip(),
                 _clickableChip(
                   Icons.memory_rounded,
                   'ذاكرة: ${_memories.length}',
@@ -639,6 +662,54 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// مؤشر المحرك الحالي: نقطة خضراء مشعّة بجانب اسم النموذج الذي يجيب الآن
+  /// (جيميناي بشكل افتراضي، وتنتقل إلى Groq تلقائياً عند تعذّر جيميناي).
+  Widget _engineChip() {
+    return ValueListenableBuilder<ChatEngine>(
+      valueListenable: activeChatEngine,
+      builder: (context, engine, _) {
+        final isGemini = engine == ChatEngine.gemini;
+        final label = isGemini ? 'جيميناي' : 'Groq';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: _green.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _green.withValues(alpha: 0.4)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _glowingDot(),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: const TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w700)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// دائرة خضراء مشعّة (توهج) تدل على أن المحرك يعمل الآن.
+  Widget _glowingDot() {
+    return Container(
+      width: 9,
+      height: 9,
+      decoration: BoxDecoration(
+        color: _green,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: _green.withValues(alpha: 0.9),
+            blurRadius: 8,
+            spreadRadius: 1,
           ),
         ],
       ),

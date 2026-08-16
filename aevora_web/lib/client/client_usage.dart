@@ -12,10 +12,13 @@ class LocalUsage {
   /// محلياً دقيقاً: الحدود الفعلية يفرضها المزود لكل مشروع وقد تتغير.
   /// Gemini Flash: ~10 طلبات/دقيقة و1,500/يوم (تُعاد عند منتصف الليل PT).
   /// Groq Whisper: ~20 طلباً/دقيقة و2,000/يوم.
+  /// Groq Llama (محادثة احتياطية): مجاني وسخي — أرقام عرض فقط.
   static const geminiLimit = 1500;
   static const geminiRpm = 10;
   static const whisperLimit = 2000;
   static const whisperRpm = 20;
+  static const groqChatLimit = 5000;
+  static const groqChatRpm = 30;
 
   static String _today() {
     final now = DateTime.now();
@@ -35,7 +38,7 @@ class LocalUsage {
     final h = await history();
     final d = h[date];
     if (d is Map) return Map<String, dynamic>.from(d);
-    return {'gemini': 0, 'whisper': 0, 'companion': 0};
+    return {'gemini': 0, 'whisper': 0, 'companion': 0, 'groq_chat': 0};
   }
 
   static Future<void> _writeDay(String date, Map<String, dynamic> day) async {
@@ -55,6 +58,7 @@ class LocalUsage {
   static Future<void> recordGemini() => _bump('gemini');
   static Future<void> recordWhisper() => _bump('whisper');
   static Future<void> recordCompanion() => _bump('companion');
+  static Future<void> recordGroqChat() => _bump('groq_chat');
 
   /// عدّاد استخدام النطق الاحترافي (صوت ايفورا عبر Gemini TTS):
   /// يُحسب كل طلب TTS + عدد الأحرف المُنطوقة حتى يتمكن المستخدم من
@@ -76,6 +80,7 @@ class LocalUsage {
     final day = await _day(date);
     final gemini = (day['gemini'] as num?)?.toInt() ?? 0;
     final whisper = (day['whisper'] as num?)?.toInt() ?? 0;
+    final groqChat = (day['groq_chat'] as num?)?.toInt() ?? 0;
     return {
       'date': date,
       'gemini': {
@@ -89,6 +94,12 @@ class LocalUsage {
         'limit': whisperLimit,
         'remaining': whisperLimit - whisper,
         'rpm': whisperRpm,
+      },
+      'groq_chat': {
+        'used': groqChat,
+        'limit': groqChatLimit,
+        'remaining': groqChatLimit - groqChat,
+        'rpm': groqChatRpm,
       },
       'tts': {
         'requests': (day['tts'] as num?)?.toInt() ?? 0,

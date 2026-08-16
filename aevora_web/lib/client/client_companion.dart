@@ -238,8 +238,15 @@ class LocalCompanion {
   ) =>
       _analyze(apiKey, userMsg, reply);
 
+  /// عدّاد التحليل الخلفي: يُجرى مرة كل ثلاث رسائل تقريباً بدل كل رسالة —
+  /// كل رسالة كانت تستهلك طلب Gemini إضافياً خلف الكواليس فاستنزفت الحصة
+  /// اليومية بلا فائدة تُذكر. الذاكرة لا تزال تُبنى، لكن بثلث الطلبات.
+  static int _analyzeCounter = 0;
+
   /// تحليل خلفي للمحادثة لاستخراج ما يستحق التذكّر (اسم، حقائق، مهام، مفردات، تصحيحات).
   static Future<void> _analyze(String apiKey, String userMsg, String reply) async {
+    _analyzeCounter++;
+    if (_analyzeCounter % 3 != 0) return;
     try {
       final prompt = '''
 اقرأ هذه المحادثة القصيرة بين المستخدم ومساعد اسمه ايفورا:
