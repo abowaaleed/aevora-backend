@@ -1,0 +1,37 @@
+{
+    "name": "إيفورا | Aevora",
+    "short_name": "ايفورا",
+    "id": "aevora",
+    "start_url": ".",
+    "scope": ".",
+    "display": "standalone",
+    "background_color": "#070B14",
+    "theme_color": "#4CAF50",
+    "description": "ايفورا — مساعد ذكي يعمل بالكامل داخل متصفحك بمفاتيحك الخاصة: محادثة، مستندات، ذاكرة شخصية، وتعلم الإنجليزية، بدون أي خادم.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
