@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' if (kIsWeb) '';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +9,7 @@ import 'package:record/record.dart';
 
 import '../client/client_companion.dart';
 import '../client/client_export.dart';
+import '../client/client_handoff.dart';
 import '../client/client_llm.dart';
 import '../client/client_plan.dart';
 import '../client/client_rag.dart';
@@ -42,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _input = TextEditingController();
   final List<_ChatMessage> _messages = [];
   final ScrollController _scroll = ScrollController();
+  final FocusNode _inputFocus = FocusNode();
 
   final AudioRecorder _recorder = AudioRecorder();
 
@@ -68,20 +72,39 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScrollChanged);
+    _inputFocus.addListener(_onInputFocus);
     SyncStore.chatReloadTick.addListener(_onCloudReload);
+    ChatHandoff.pendingPrompt.addListener(_onHandoffPrompt);
     _loadHistory();
     _refreshCompanion();
     _maybeProactive();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onHandoffPrompt());
   }
 
   @override
   void dispose() {
+    ChatHandoff.pendingPrompt.removeListener(_onHandoffPrompt);
     SyncStore.chatReloadTick.removeListener(_onCloudReload);
     _scroll.removeListener(_onScrollChanged);
+    _inputFocus.removeListener(_onInputFocus);
+    _inputFocus.dispose();
     _input.dispose();
     _scroll.dispose();
     _recorder.dispose();
     super.dispose();
+  }
+
+  void _onInputFocus() {
+    if (_inputFocus.hasFocus) {
+      _scrollToBottom(force: true);
+    }
+  }
+
+  void _onHandoffPrompt() {
+    final p = ChatHandoff.pendingPrompt.value;
+    if (p == null || p.trim().isEmpty) return;
+    ChatHandoff.pendingPrompt.value = null;
+    unawaited(_send(p.trim()));
   }
 
   bool get _nearBottom {
@@ -243,8 +266,20 @@ class _ChatScreenState extends State<ChatScreen> {
     if (ok == true) {
       try {
         await LocalCompanion.reset();
+        await LocalDb.kvDelete('chat_messages');
       } catch (_) {}
       _proactiveDismissed = false;
+      if (mounted) {
+        setState(() {
+          _messages
+            ..clear()
+            ..add(_ChatMessage(
+              'تم مسح المحادثة والذاكرة. ابدأ من جديد متى شئت.',
+              false,
+            ));
+        });
+      }
+      await _persistMessages();
       await _refreshCompanion();
     }
   }
@@ -306,31 +341,28 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {}
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
-      // لا نسحب المستخدم إلى الأسفل قسراً وهو يقرأ المحادثة القديمة؛
-      // يستخدم زر السهم عندما يريد العودة لآخر رسالة.
-      if (!_nearBottom) return;
+      if (!force && !_nearBottom) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
       );
     });
   }
 
-  Future<void> _send(String text) async {
+  Future<void> _send(String text, {bool speakReply = false}) async {
     if (text.trim().isEmpty || _isLoading) return;
-    // إنشاء سياق الصوت داخل إيماءة المستخدم حتى يبدأ النطق الاحترافي فوراً
-    // بعد الرد دون أن تحجبه سياسة التشغيل التلقائي.
     warmUpAudio();
+    _inputFocus.unfocus();
     setState(() {
       _messages.add(_ChatMessage(text, true));
       _isLoading = true;
       _input.clear();
     });
-    _scrollToBottom();
+    _scrollToBottom(force: true);
     // حفظ فوري لرسالة المستخدم لحظة الإرسال حتى لا تختفي أبداً عند أي
     // إعادة إنشاء للشاشة (تحديث جلسة/توجيه).
     await _persistMessages();
@@ -403,7 +435,9 @@ class _ChatScreenState extends State<ChatScreen> {
       // إنهاء حالة الانشغال فوراً قبل النطق حتى لا تُعلَّق الواجهة على توليد
       // الصوت؛ النطق التلقائي يعمل بالتوازي ولا يحجب أي زر.
       if (mounted) setState(() => _isLoading = false);
-      unawaited(_speakAuto(reply, messageId: assistant.id));
+      if (speakReply) {
+        unawaited(_speakAuto(reply, messageId: assistant.id));
+      }
     } catch (e) {
       // رسالة ودّية بدل «خطأ: Exception: ...» التقنية — لا نعرض للمستخدم
       // نصاً خاماً مخيفاً، بل صياغة لطيفة تناسب طبيعة المحادثة.
@@ -451,15 +485,21 @@ class _ChatScreenState extends State<ChatScreen> {
       if (path == null) return;
 
       if (mounted) setState(() => _isThinking = true);
-      final audioBytes = (await http.get(Uri.parse(path))).bodyBytes;
+
+      Uint8List audioBytes;
+      if (kIsWeb) {
+        audioBytes = (await http.get(Uri.parse(path))).bodyBytes;
+      } else {
+        audioBytes = await File(path).readAsBytes();
+      }
 
       final text = await groqTranscribe(
         apiKey: widget.keys.groqKey,
         wavBytes: audioBytes,
       );
       if (mounted) setState(() => _isThinking = false);
-      await _send(text);
-    } catch (_) {
+      await _send(text, speakReply: true);
+    } catch (e) {
       if (mounted) {
         setState(() {
           _isThinking = false;
@@ -492,17 +532,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF070B14),
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        backgroundColor: const Color(0xFF070B14),
+        resizeToAvoidBottomInset: true,
       body: Column(
         children: [
-          _topBar(),
+          SafeArea(bottom: false, child: _topBar()),
           if (_proactive != null && !_proactiveDismissed) _proactiveCard(),
           Expanded(
             child: Stack(
               children: [
                 ListView.builder(
                   controller: _scroll,
+                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: const EdgeInsets.all(16),
                   itemCount: _messages.length + (_hasExtraPanels() ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -585,9 +630,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
-          _inputBar(),
+          SafeArea(top: false, child: _inputBar()),
         ],
       ),
+    ),
     );
   }
 
@@ -950,12 +996,15 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(
             child: TextField(
               controller: _input,
+              focusNode: _inputFocus,
               textDirection: TextDirection.rtl,
               style: const TextStyle(color: Colors.white, height: 1.5),
               keyboardType: TextInputType.multiline,
               minLines: 1,
               maxLines: 5,
-              textInputAction: TextInputAction.newline,
+              textInputAction: TextInputAction.send,
+              onTap: () => _scrollToBottom(force: true),
+              onTapOutside: (_) => _inputFocus.unfocus(),
               onSubmitted: (v) => _send(v),
               decoration: InputDecoration(
                 hintText: 'اكتب سؤالك...',

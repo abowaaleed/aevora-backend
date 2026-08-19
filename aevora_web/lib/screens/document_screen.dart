@@ -395,7 +395,7 @@ class _DocumentScreenState extends State<DocumentScreen> {
                   child: _files.isEmpty
                       ? const Center(
                           child: Text(
-                            'لا توجد مستندات بعد.\nارفع ملفات PDF أو Word أو TXT أو صور من زر «رفع ملف» بالأسفل.',
+                            'لا توجد مستندات بعد.\nارفع PDF أو Word أو TXT أو PNG/JPG ثم اسأل المساعد عن أي بند فيها.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),

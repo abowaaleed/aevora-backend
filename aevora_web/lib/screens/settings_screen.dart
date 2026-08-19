@@ -51,17 +51,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     SyncStore.cloudAppliedTick.addListener(_onCloudData);
     activeChatEngine.addListener(_onEngineChanged);
+    LocalUsage.changed.addListener(_onUsageChanged);
     _loadUsage();
   }
 
   @override
   void dispose() {
+    LocalUsage.changed.removeListener(_onUsageChanged);
     SyncStore.cloudAppliedTick.removeListener(_onCloudData);
     activeChatEngine.removeListener(_onEngineChanged);
     super.dispose();
   }
 
-  /// تغيّر المحرك النشط (جيميناي ← Groq أو العكس) — تُحدَّث النقطة الخضراء.
+  void _onUsageChanged() {
+    _loadUsage(silent: true);
+  }
+
   void _onEngineChanged() {
     if (mounted) setState(() {});
   }
@@ -69,14 +74,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// بيانات (عدادات/ملفات) وصلت من السحابة بعد بناء الشاشة — أعد التحميل
   /// تلقائياً حتى لا تبقى العدادات صفراً بانتظار تحديث يدوي.
   void _onCloudData() {
-    _loadUsage();
+    _loadUsage(silent: true);
   }
 
-  Future<void> _loadUsage() async {
-    setState(() {
-      _usageLoading = true;
-      _usageError = null;
-    });
+  Future<void> _loadUsage({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _usageLoading = true;
+        _usageError = null;
+      });
+    }
     try {
       final u = await LocalUsage.today();
       final docs = await documentUsageSummary();
@@ -188,6 +195,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: 'البريد الإلكتروني',
             value: widget.keys.email.isEmpty ? 'غير مضبوط' : widget.keys.email,
           ),
+          const SizedBox(height: 10),
+          const Text('مزودون قريباً',
+              style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white70)),
+          const SizedBox(height: 6),
+          _comingKey('ChatGPT (OpenAI)'),
+          _comingKey('Anthropic Claude'),
+          _comingKey('DeepSeek'),
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: _openEdit,
@@ -504,6 +518,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 u['stt_groq'] as Map<String, dynamic>?),
             const SizedBox(height: 12),
             _ttsCharsRow(u['tts'] as Map<String, dynamic>?),
+            const SizedBox(height: 12),
+            _backupVoiceRow(u['backup_voice'] as num?),
             const SizedBox(height: 4),
             const Text(
               'النطق الاحترافي في خطتك «المجانية» يعمل عبر صوت إيدج الطبيعي '
@@ -545,7 +561,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: TextButton.icon(
                 onPressed: _usageLoading ? null : _loadUsage,
                 icon: const Icon(Icons.refresh, size: 18),
-                label: Text(_usageLoading ? 'جارٍ التحديث...' : 'تحديث'),
+                label: Text(_usageLoading ? 'جارٍ التحديث...' : 'تحديث (اختياري)'),
               ),
             ),
           ],
@@ -690,6 +706,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// صف الصوت الاحتياطي المدمج في الجهاز — عدد الاستخدامات اليومية.
+  Widget _backupVoiceRow(num? count) {
+    final n = count?.toInt() ?? 0;
+    return Rtl(
+      child: Row(
+        children: [
+          const Icon(Icons.record_voice_over, color: Color(0xFF81C784), size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'الصوت الاحتياطي (جهازك): $n استخدام اليوم',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// صف حصة المستندات: العدد والمساحة مقابل حدود الخطة مع زر ترقية.
   Widget _documentsRow() {
     return ValueListenableBuilder<PlanState>(
@@ -754,6 +789,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (bytes < 1024) return '$bytes بايت';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} ك.ب';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} م.ب';
+  }
+
+  Widget _comingKey(String title) {
+    return Card(
+      color: const Color(0xFF101624),
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      child: ListTile(
+        leading: const Icon(Icons.lock_clock_outlined, color: Colors.white38),
+        title: Text(title, style: const TextStyle(color: Colors.white70)),
+        subtitle: const Text('سيُضاف حقل المفتاح لاحقاً دون تغيير طريقة الاستخدام',
+            style: TextStyle(color: Colors.white38, fontSize: 11)),
+        enabled: false,
+      ),
+    );
   }
 
   Widget _tile({required IconData icon, required String title, required String value}) {

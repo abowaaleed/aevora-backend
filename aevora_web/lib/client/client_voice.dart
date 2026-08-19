@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'client_plan.dart';
 import 'client_usage.dart';
+import 'client_backup_voice.dart';
 import 'voice_platform_stub.dart'
     if (dart.library.js_interop) 'voice_platform_web.dart' as voice_platform;
 
@@ -395,11 +396,8 @@ bool edgeIsTurnEnd(String message) => message.contains('Path: turn.end');
 /// المستخدم حتى لا يُحجب التشغيل بسياسة التشغيل التلقائي (المتصفح).
 void warmUpAudio() => voice_platform.warmUpAudio();
 
-/// نطق النص: الخطة «المجانية» تستخدم صوت إيدج الاحترافي المجاني أساساً
-/// (بلا أي مفتاح وبلا حدود وبلا استهلاك لحصة Gemini — فالنطق عبر Gemini TTS
-/// كان يستهلك نفس الحصة اليومية للمحادثة فيتوقف الحديث مبكراً). خطة
-/// «مميز/مُدارة» تستخدم النطق الاحترافي المتدفق من Gemini بلا حدود ثم إيدج
-/// ثم صوت المتصفح — بتحويل صامت وسلس بينها وبلا أي رسالة خطأ.
+/// نطق النص بصوت Gemini البشري أولاً، ثم تحويل صامت إلى صوت إيدج ثم
+/// صوت الجهاز ثم صوت المتصفح عند نفاد الحصة أو أي تعذّر — بلا انقطاع محسوس.
 Future<void> speakSmart(
   String text, {
   String? apiKey,
@@ -407,16 +405,11 @@ Future<void> speakSmart(
   void Function()? onStart,
 }) async {
   final hasKey = apiKey != null && apiKey.trim().isNotEmpty;
-  final premium = PlanStore.current.value.isPremium;
 
-  // الدرجة الأولى (للمشتركين فقط): النطق الاحترافي المتدفق من Gemini —
-  // مجاني، بلا حدود، ولا يمس حصة المحادثة اليومية.
-  if (hasKey && premium) {
+  if (hasKey) {
     if (await _tryProfessional(text, apiKey, rate, onStart)) return;
   }
 
-  // الدرجة الثانية: صوت إيدج الاحترافي المجاني (أصوات طبيعية، بلا مفتاح،
-  // بلا حدود) — هو النطق الأساسي للخطة المجانية.
   try {
     await voice_platform.speakEdgeTts(text, rate: rate, onStart: onStart);
     return;
@@ -424,8 +417,12 @@ Future<void> speakSmart(
     voice_platform.stopPlaybackNow();
   }
 
-  // الدرجة الثالثة: صوت المتصفح الأساسي بأعلى جودة متاحة (فلترة الأصوات)،
-  // بمعدل نطق 0.95 وطبقة صوت 1.0 — التحويل هنا صامت تماماً.
+  if (BackupVoice.instance.isReady) {
+    if (await BackupVoice.instance.speak(text, rate: rate, onStart: onStart)) {
+      return;
+    }
+  }
+
   if (voice_platform.isBrowserSpeechSupported) {
     await voice_platform.speakText(text,
         rate: rate == 1.0 ? 0.95 : rate, onStart: onStart);

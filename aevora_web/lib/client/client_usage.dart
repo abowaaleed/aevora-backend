@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'client_storage.dart';
 import 'client_sync.dart';
 
@@ -7,6 +9,9 @@ import 'client_sync.dart';
 /// وتُرفع إلى Firestore مع الحساب لتبقى ملازمة للمستخدم في أي متصفح/هاتف.
 class LocalUsage {
   static const _key = 'usage_history';
+
+  /// يزداد عند كل تسجيل استهلاك — لتحديث عدّادات الإعدادات تلقائياً.
+  static final ValueNotifier<int> changed = ValueNotifier<int>(0);
 
   /// الحدود الرسمية للطبقة المجانية (معلومة للعرض فقط) — لا تمثل عدّاداً
   /// محلياً دقيقاً: الحدود الفعلية يفرضها المزود لكل مشروع وقد تتغير.
@@ -46,6 +51,7 @@ class LocalUsage {
     h[date] = day;
     await LocalDb.kvPut(_key, h);
     SyncStore.schedulePush();
+    changed.value++;
   }
 
   static Future<void> _bump(String field) async {
@@ -71,6 +77,8 @@ class LocalUsage {
     day['tts_chars'] = ((day['tts_chars'] as num?) ?? 0) + chars;
     await _writeDay(date, day);
   }
+
+  static Future<void> recordBackupVoice() => _bump('backup_voice');
 
   /// حالة اليوم الحالي بصيغة العرض (used/limit/remaining) مع معلومات
   /// الحدود الرسمية للعرض فقط (rpm) — ليطلع المستخدم على سبب أخطاء
@@ -105,6 +113,7 @@ class LocalUsage {
         'requests': (day['tts'] as num?)?.toInt() ?? 0,
         'chars': (day['tts_chars'] as num?)?.toInt() ?? 0,
       },
+      'backup_voice': (day['backup_voice'] as num?)?.toInt() ?? 0,
       'companion': (day['companion'] as num?)?.toInt() ?? 0,
     };
   }
@@ -131,5 +140,6 @@ class LocalUsage {
       }
     }
     await LocalDb.kvPut(_key, local);
+    changed.value++;
   }
 }

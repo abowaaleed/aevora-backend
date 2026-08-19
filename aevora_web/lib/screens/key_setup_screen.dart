@@ -139,6 +139,11 @@ class _KeySetupScreenState extends State<KeySetupScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
+                const Text(
+                  'مزودون قريباً (ChatGPT · Claude · DeepSeek) — أبقِ مفاتيح Gemini وGroq الآن.',
+                  style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.5),
+                ),
+                const SizedBox(height: 24),
                 FilledButton(
                   onPressed: _saving ? null : _save,
                   style: FilledButton.styleFrom(

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../client/client_export.dart';
+import '../client/client_share.dart';
 
-/// نافذة منبثقة لتصدير محادثة (مشاركة / تحميل / نسخ) مع نص ترويج ايفورا.
+/// نافذة مشاركة المحادثة: واتساب، تيليجرام، البريد، نسخ.
 Future<void> showExportSheet(
   BuildContext context, {
   required String text,
@@ -16,14 +17,34 @@ Future<void> showExportSheet(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
     builder: (ctx) {
-      void done(String msg) {
-        Navigator.pop(ctx);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg, textAlign: TextAlign.right),
-            backgroundColor: const Color(0xFF1D3A1D),
-          ),
-        );
+      Future<void> go(Future<bool> Function() action, String okMsg) async {
+        try {
+          final ok = await action();
+          if (!ctx.mounted) return;
+          Navigator.pop(ctx);
+          if (!ok) {
+            await copyTextToClipboard(text);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'تعذّر فتح التطبيق — نُسخت المحادثة إلى الحافظة.',
+                    textAlign: TextAlign.right,
+                  ),
+                ),
+              );
+            }
+          } else if (okMsg.isNotEmpty && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(okMsg, textAlign: TextAlign.right),
+                backgroundColor: const Color(0xFF1D3A1D),
+              ),
+            );
+          }
+        } catch (_) {
+          if (ctx.mounted) Navigator.pop(ctx);
+        }
       }
 
       return SafeArea(
@@ -33,7 +54,7 @@ Future<void> showExportSheet(
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
               child: Text(
-                'تصدير المحادثة مع ترويج ايفورا',
+                'مشاركة المحادثة',
                 style: theme.textTheme.titleMedium?.copyWith(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
@@ -43,42 +64,65 @@ Future<void> showExportSheet(
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 4, 20, 12),
               child: Text(
-                'سيُرفق تلقائياً نص دعوة لتحميل واستخدام ايفورا مع المحادثة.',
+                'أرسل المحادثة عبر واتساب أو تيليجرام أو البريد.',
                 style: TextStyle(color: Colors.white54, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
             ),
             const Divider(height: 1, color: Colors.white12),
             ListTile(
-              leading: const Icon(Icons.ios_share_rounded, color: Color(0xFF4CAF50)),
-              title: const Text('مشاركة', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('واتساب / تيليجرام / البريد...',
-                  style: TextStyle(color: Colors.white38, fontSize: 12)),
+              leading: const Icon(Icons.chat_rounded, color: Color(0xFF25D366)),
+              title: const Text('واتساب', style: TextStyle(color: Colors.white)),
+              onTap: () => go(() => shareViaWhatsApp(text), ''),
+            ),
+            ListTile(
+              leading: const Icon(Icons.send_rounded, color: Color(0xFF2AABEE)),
+              title: const Text('تيليجرام', style: TextStyle(color: Colors.white)),
+              onTap: () => go(() => shareViaTelegram(text), ''),
+            ),
+            ListTile(
+              leading: const Icon(Icons.mail_outline_rounded, color: Color(0xFF4CAF50)),
+              title: const Text('البريد الإلكتروني',
+                  style: TextStyle(color: Colors.white)),
+              onTap: () => go(() => shareViaEmail(text), ''),
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_copy_rounded, color: Color(0xFF4CAF50)),
+              title: const Text('نسخ إلى الحافظة',
+                  style: TextStyle(color: Colors.white)),
               onTap: () async {
-                final ok = await tryShareText(text, title: 'محادثة مع ايفورا');
-                if (ok) {
-                  if (ctx.mounted) Navigator.pop(ctx);
-                } else {
-                  done('المشاركة غير مدعومة على هذا المتصفح — استخدم التحميل أو النسخ.');
+                await copyTextToClipboard(text);
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('تم نسخ المحادثة.', textAlign: TextAlign.right),
+                      backgroundColor: Color(0xFF1D3A1D),
+                    ),
+                  );
                 }
               },
             ),
             ListTile(
               leading: const Icon(Icons.download_rounded, color: Color(0xFF4CAF50)),
-              title: const Text('تحميل ملف نصي', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('ملف .txt يمكن لصقه في Word', style: TextStyle(color: Colors.white38, fontSize: 12)),
+              title: const Text('تحميل ملف نصي',
+                  style: TextStyle(color: Colors.white)),
               onTap: () {
-                downloadTextFile(text, filename);
-                done('تم تنزيل الملف.');
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.content_copy_rounded, color: Color(0xFF4CAF50)),
-              title: const Text('نسخ إلى الحافظة', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('الصقها أينما شئت', style: TextStyle(color: Colors.white38, fontSize: 12)),
-              onTap: () async {
-                await copyTextToClipboard(text);
-                done('تم نسخ المحادثة.');
+                try {
+                  downloadTextFile(text, filename);
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('تم تنزيل الملف.', textAlign: TextAlign.right),
+                      backgroundColor: Color(0xFF1D3A1D),
+                    ),
+                  );
+                } catch (e) {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('$e', textAlign: TextAlign.right)),
+                  );
+                }
               },
             ),
             const SizedBox(height: 8),

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "981343794141",
+    "project_id": "aevora-1f64f",
+    "storage_bucket": "aevora-1f64f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:981343794141:android:dd9cb727b05b1849253c34",
+        "android_client_info": {
+          "package_name": "com.aevora.aevora_web"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "981343794141-t0hc2tmhdcg77r03m0qqbloqrbsveu7v.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aevora.aevora_web",
+            "certificate_hash": "557d7e9b671e83ba1b4f5e470397120e064278e4"
+          }
+        },
+        {
+          "client_id": "981343794141-tkter2nqlt5cf0745kpr0kenpr13cqsi.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDYvF32F_njJEVq1Mbw1Q_kGIqXsyvRGE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "981343794141-tkter2nqlt5cf0745kpr0kenpr13cqsi.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "981343794141-lo0r47dtm98dg9ckk1ho86cmleojmvkt.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.aevora.aevoraWeb"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

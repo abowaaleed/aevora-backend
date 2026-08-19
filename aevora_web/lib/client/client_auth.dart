@@ -1,10 +1,11 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../firebase_config.dart';
 
-/// طبقة المصادقة: دخول بحساب Google عبر Firebase Auth (من المتصفح مباشرة).
-/// الجلسة تُحفظ تلقائياً في المتصفح فلا يُعاد تسجيل الدخول عند كل زيارة.
+/// طبقة المصادقة: دخول بحساب Google عبر Firebase Auth.
 Future<void> initFirebase() async {
   if (!isFirebaseConfigured) return;
   if (Firebase.apps.isEmpty) {
@@ -19,10 +20,10 @@ Future<void> initFirebase() async {
       ),
     );
   }
-  // حفظ الجلسة محلياً (السلوك الافتراضي على الويب) ليظل المستخدم مسجلاً.
-  await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
-  // إكمال أي تسجيل دخول Redirect عالق من محاولة سابقة.
-  await getGoogleRedirectResult();
+  if (kIsWeb) {
+    await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    await getGoogleRedirectResult();
+  }
 }
 
 bool get isAuthEnabled => isFirebaseConfigured;
@@ -37,44 +38,54 @@ String? get currentEmail => isSignedIn ? FirebaseAuth.instance.currentUser!.emai
 String? get currentDisplayName =>
     isSignedIn ? FirebaseAuth.instance.currentUser!.displayName : null;
 
-/// تيار حالة الجلسة (يُعاد بناؤه عند كل تغيّر دخول/خروج).
 Stream<User?> authStateStream() {
   if (!isAuthEnabled) return const Stream.empty();
   return FirebaseAuth.instance.authStateChanges();
 }
 
-/// تسجيل الدخول بحساب Google عبر نافذة منبثقة (يعمل من المتصفح مباشرة).
-/// عند فشل المنبثقة (حجب النوافذ مثلاً) استخدم [signInWithGoogleRedirect].
+/// تسجيل الدخول بحساب Google.
 Future<User?> signInWithGoogle() async {
   if (!isAuthEnabled) return null;
-  final provider = GoogleAuthProvider();
-  final cred = await FirebaseAuth.instance.signInWithPopup(provider);
-  return cred.user;
+  
+  if (kIsWeb) {
+    final provider = GoogleAuthProvider();
+    final cred = await FirebaseAuth.instance.signInWithPopup(provider);
+    return cred.user;
+  } else {
+    // دعم الدخول على الأندرويد والايفون
+    final GoogleSignIn googleSignIn = GoogleSignIn();
+    final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+    if (googleUser == null) return null;
+
+    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+    final AuthCredential credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+
+    final UserCredential userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
+    return userCredential.user;
+  }
 }
 
-/// تسجيل الدخول بنافذة إعادة توجيه كاملة (تعمل حتى مع حجب النوافذ المنبثقة).
-/// تعيد التوجيه إلى Google ثم تعود للموقع؛ أكمل النتيجة عبر
-/// [getGoogleRedirectResult] عند بدء التطبيق.
 Future<void> signInWithGoogleRedirect() async {
-  if (!isAuthEnabled) return;
+  if (!isAuthEnabled || !kIsWeb) return;
   final provider = GoogleAuthProvider();
   await FirebaseAuth.instance.signInWithRedirect(provider);
 }
 
-/// إكمال تسجيل الدخول عبر Redirect بعد عودة المتصفح من Google.
-/// استدعِها عند بدء التطبيق للتعامل مع حالة الانتظار.
 Future<void> getGoogleRedirectResult() async {
-  if (!isAuthEnabled) return;
+  if (!isAuthEnabled || !kIsWeb) return;
   try {
     await FirebaseAuth.instance.getRedirectResult();
-  } catch (_) {
-    // لا توجد نتيجة redirect (أو انتهت): سلوك طبيعي.
-  }
+  } catch (_) {}
 }
 
-/// تسجيل الخروج (تبقى البيانات المحلية لكنها تتوقف عن المزامنة).
 Future<void> signOut() async {
   if (isAuthEnabled && Firebase.apps.isNotEmpty) {
+    if (!kIsWeb) {
+      await GoogleSignIn().signOut();
+    }
     await FirebaseAuth.instance.signOut();
   }
 }

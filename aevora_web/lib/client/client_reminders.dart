@@ -20,6 +20,7 @@ class ReminderItem {
   final int hour;
   final int minute;
   final List<int> days;
+  final String interests;
 
   const ReminderItem({
     required this.id,
@@ -29,6 +30,7 @@ class ReminderItem {
     this.hour = 9,
     this.minute = 0,
     this.days = const [0, 1, 2, 3, 4, 5, 6],
+    this.interests = '',
   });
 
   bool get everyDay => days.length == 7;
@@ -51,6 +53,7 @@ class ReminderItem {
     int? hour,
     int? minute,
     List<int>? days,
+    String? interests,
   }) =>
       ReminderItem(
         id: id ?? this.id,
@@ -60,6 +63,7 @@ class ReminderItem {
         hour: hour ?? this.hour,
         minute: minute ?? this.minute,
         days: days ?? this.days,
+        interests: interests ?? this.interests,
       );
 
   Map<String, dynamic> toJson() => {
@@ -70,6 +74,7 @@ class ReminderItem {
         'hour': hour,
         'minute': minute,
         'days': days,
+        'interests': interests,
       };
 
   factory ReminderItem.fromJson(Map<String, dynamic> j) => ReminderItem(
@@ -86,6 +91,7 @@ class ReminderItem {
                 ?.map((e) => (e as num).toInt())
                 .toList() ??
             const [0, 1, 2, 3, 4, 5, 6],
+        interests: j['interests'] as String? ?? '',
       );
 
   static String generateId() =>
@@ -241,14 +247,48 @@ class DailyContent {
 
   static final _allIdeas = [..._ideas, ..._behaviors, ..._tips];
 
-  static String forDate(DateTime date, {ReminderType type = ReminderType.idea}) {
+  static String forDate(DateTime date, {ReminderType type = ReminderType.idea, String interests = ''}) {
+    if (interests.isNotEmpty) {
+      final seed = date.year * 1000 + date.month * 100 + date.day;
+      final rng = Random(seed);
+      if (interests.contains('انجليزي') || interests.contains('English')) {
+        const engIdeas = [
+          '5 كلمات جديدة: (Effort, Achieve, Persistent, Unique, Valuable). حاول وضعها في جملة.',
+          'قاعدة اليوم: استخدم "used to" للتعبير عن عادات قديمة انتهت.',
+          'تحدي النطق: حاول نطق كلمة "Throughout" بشكل صحيح 5 مرات.',
+          'استمع لمقطع قصير من BBC Learning English وطبق ما تعلمته.',
+          'اكتب 3 جمل عن خططك لعطلة نهاية الأسبوع بالإنجليزية.',
+        ];
+        return engIdeas[rng.nextInt(engIdeas.length)];
+      }
+      if (interests.contains('تقنية') || interests.contains('Tech')) {
+        const techIdeas = [
+          'خبر ملهم: الذكاء الاصطناعي يساهم في اكتشاف علاجات جديدة للأمراض.',
+          'نصيحة تقنية: جرب استخدام اختصارات الكيبورد لتسريع عملك اليومي.',
+          'فكرة مشروع: برمج تطبيقاً بسيطاً يحل مشكلة صغيرة تواجهها.',
+          'سلوك تقني: احرص على تحديث برامجك دورياً لحماية بياناتك.',
+          'هل تعلم؟ لغة بايثون سُميت تيمناً بفرقة Monty Python الكوميدية.',
+        ];
+        return techIdeas[rng.nextInt(techIdeas.length)];
+      }
+      return 'بناءً على طلبك «$interests»: افتح ايفورا الآن لأسرد لك التفاصيل كاملة.';
+    }
     final seed = date.year * 1000 + date.month * 100 + date.day;
     final rng = Random(seed);
     final pool = type == ReminderType.idea ? _allIdeas : _behaviors;
     return pool[rng.nextInt(pool.length)];
   }
 
-  static String previewForType({ReminderType type = ReminderType.idea}) {
+  static String previewForType({ReminderType type = ReminderType.idea, String interests = ''}) {
+    if (interests.isNotEmpty) {
+      if (interests.contains('انجليزي') || interests.contains('English')) {
+        return '5 كلمات جديدة: (Effort, Achieve, Persistent, Unique, Valuable). الجملة: "Consistent effort leads to valuable results."';
+      }
+      if (interests.contains('تقنية') || interests.contains('Tech')) {
+        return 'خبر ملهم: تقنيات الواقع المعزز تبدأ في تغيير جذري لقطاع التعليم الطبي.';
+      }
+      return 'لا تفوّت هذا الإلهام عن «$interests» — افتح ايفورا للسرد.';
+    }
     final rng = Random();
     final pool = type == ReminderType.idea ? _allIdeas : _behaviors;
     return pool[rng.nextInt(pool.length)];
@@ -331,6 +371,15 @@ class ReminderService {
     return const ReminderPrefs();
   }
 
+  Future<ReminderItem?> getById(String id) async {
+    final prefs = await load();
+    try {
+      return prefs.items.firstWhere((i) => i.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _save(ReminderPrefs prefs) async {
     try {
       final p = await SharedPreferences.getInstance();
@@ -338,17 +387,11 @@ class ReminderService {
     } catch (_) {}
   }
 
-  tz.TZDateTime _nextOccurrence(int hour, int minute, List<int> days) {
-    final now = tz.TZDateTime.now(tz.local);
-    for (int offset = 0; offset < 8; offset++) {
-      final candidate = now.add(Duration(days: offset));
-      if (days.contains(candidate.weekday % 7)) {
-        final scheduled = tz.TZDateTime(
-            tz.local, candidate.year, candidate.month, candidate.day, hour, minute);
-        if (scheduled.isAfter(now)) return scheduled;
-      }
-    }
-    return tz.TZDateTime(tz.local, now.year, now.month, now.day + 1, hour, minute);
+  /// أيام الواجهة: 0=سبت … 6=جمعة. Dart: 1=اثنين … 7=أحد، 6=سبت.
+  static int _uiDayToDartWeekday(int ui) {
+    const map = [6, 7, 1, 2, 3, 4, 5];
+    if (ui < 0 || ui > 6) return 6;
+    return map[ui];
   }
 
   NotificationDetails _details({bool high = false}) => NotificationDetails(
@@ -356,14 +399,17 @@ class ReminderService {
           _channelId,
           _channelName,
           channelDescription: 'تنبيهات يومية للأفكار والمهام',
-          importance: high ? Importance.high : Importance.defaultImportance,
-          priority: high ? Priority.high : Priority.defaultPriority,
+          importance: high ? Importance.max : Importance.high,
+          priority: high ? Priority.max : Priority.high,
           icon: '@mipmap/ic_launcher',
+          // sound: const RawResourceAndroidNotificationSound('aevora_sound'),
+          // playSound: true,
         ),
         iOS: const DarwinNotificationDetails(
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
+          // sound: 'aevora_sound.wav',
         ),
       );
 
@@ -371,25 +417,48 @@ class ReminderService {
     try {
       await _plugin.cancelAll();
       for (final item in prefs.items.where((r) => r.enabled)) {
-        final title =
-            item.type == ReminderType.idea ? 'ايفورا 💡' : 'ايفورا ✅';
-        final body = item.title.isNotEmpty
-            ? item.title
-            : (item.type == ReminderType.idea
-                ? 'لحظة تفكير: ما الذي تعلّمته اليوم؟'
-                : 'تذكير: هل أنجزت مهامك اليومية؟');
-        await _plugin.zonedSchedule(
-          item.id.hashCode & 0x7FFFFFFF,
-          title,
-          body,
-          _nextOccurrence(item.hour, item.minute, item.days),
-          _details(),
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          matchDateTimeComponents: DateTimeComponents.time,
-          payload: item.id,
-        );
+        final isIdea = item.type == ReminderType.idea;
+        final title = isIdea ? 'ايفورا 💡' : 'ايفورا ✅';
+        final body = isIdea
+            ? (item.interests.isNotEmpty
+                ? 'لا تفوّت هذا الإلهام — افتح التطبيق للسرد'
+                : DailyContent.forDate(DateTime.now(), interests: item.interests))
+            : (item.title.isNotEmpty
+                ? 'تذكير: ${item.title}'
+                : 'حان وقت مهمتك — افتح ايفورا');
+
+        final days = item.days.isEmpty ? const [0, 1, 2, 3, 4, 5, 6] : item.days;
+        for (final uiDay in days) {
+          final dartDay = _uiDayToDartWeekday(uiDay);
+          final when = _nextForWeekday(item.hour, item.minute, dartDay);
+          final nid = (item.id.hashCode ^ (dartDay * 31)) & 0x7FFFFFFF;
+          await _plugin.zonedSchedule(
+            nid,
+            title,
+            body,
+            when,
+            _details(),
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+            payload: item.id,
+          );
+        }
       }
     } catch (_) {}
+  }
+
+  tz.TZDateTime _nextForWeekday(int hour, int minute, int dartWeekday) {
+    final now = tz.TZDateTime.now(tz.local);
+    var candidate = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
+    for (var i = 0; i < 8; i++) {
+      if (candidate.weekday == dartWeekday && candidate.isAfter(now)) {
+        return candidate;
+      }
+      candidate = candidate.add(const Duration(days: 1));
+      candidate = tz.TZDateTime(
+          tz.local, candidate.year, candidate.month, candidate.day, hour, minute);
+    }
+    return candidate;
   }
 
   Future<void> saveAndApply(ReminderPrefs prefs) async {
@@ -397,9 +466,9 @@ class ReminderService {
     await apply(prefs);
   }
 
-  Future<void> testNotification(ReminderType type) async {
-    final content = DailyContent.previewForType(type: type);
-    final title = type == ReminderType.idea ? 'ايفورا 💡' : 'ايفورا ✅';
+  Future<void> testNotification(ReminderType type, {String interests = ''}) async {
+    final content = DailyContent.previewForType(type: type, interests: interests);
+    final title = type == ReminderType.idea ? 'ايفورا 💡 (اختبار)' : 'ايفورا ✅ (اختبار)';
     try {
       await _plugin.show(
         9999,

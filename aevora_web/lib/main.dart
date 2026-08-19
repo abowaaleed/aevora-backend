@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'client/client_auth.dart';
+import 'client/client_backup_voice.dart';
 import 'client/client_consent.dart';
 import 'client/client_plan.dart';
 import 'client/client_reminders.dart';
@@ -21,6 +22,7 @@ Future<void> main() async {
   final keys = await AppStorage.load();
   await PlanStore.loadLocal();
   await ConsentStore.loadLocal();
+  unawaited(BackupVoice.instance.init());
   try {
     await initFirebase();
     if (isAuthEnabled) {

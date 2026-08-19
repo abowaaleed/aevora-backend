@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../client/client_auth.dart';
+import '../client/client_handoff.dart';
 import '../client/client_sync.dart';
 import '../config.dart';
 import '../widgets/voice_control_bar.dart';
 import 'assistant_screen.dart';
+import 'document_screen.dart';
 import 'settings_screen.dart';
 
 class Shell extends StatefulWidget {
@@ -27,15 +29,23 @@ class _ShellState extends State<Shell> {
     // عند تطبيق بيانات قادمة من الحساب (مفاتيح أُرسلت من جهاز آخر) نعيد
     // تحميل المفاتيح حتى تُحدَّث كل الشاشات.
     SyncStore.onStateApplied = _reloadKeys;
+    ChatHandoff.tabIndex.addListener(_onTabRequest);
     _load();
   }
 
   @override
   void dispose() {
+    ChatHandoff.tabIndex.removeListener(_onTabRequest);
     if (SyncStore.onStateApplied == _reloadKeys) {
       SyncStore.onStateApplied = null;
     }
     super.dispose();
+  }
+
+  void _onTabRequest() {
+    final i = ChatHandoff.tabIndex.value;
+    if (i == null || !mounted) return;
+    setState(() => _currentIndex = i.clamp(0, 2));
   }
 
   void _reloadKeys() {
@@ -64,6 +74,7 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
+      DocumentScreen(keys: _keys),
       AssistantScreen(keys: _keys),
       SettingsScreen(
         keys: _keys,
@@ -89,6 +100,11 @@ class _ShellState extends State<Shell> {
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) => setState(() => _currentIndex = index),
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.folder_shared_outlined),
+            selectedIcon: Icon(Icons.folder_shared),
+            label: 'مستندات',
+          ),
           NavigationDestination(
             icon: Icon(Icons.auto_awesome_rounded),
             selectedIcon: Icon(Icons.auto_awesome_rounded),
