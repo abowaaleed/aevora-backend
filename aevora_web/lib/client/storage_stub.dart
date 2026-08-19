@@ -37,9 +37,33 @@ class LocalDb {
           _kv[k.substring(_prefix.length)] = jsonDecode(raw);
         } catch (_) {}
       }
-    } catch (_) {
-      // غياب المكوّن (مثل بيئة الاختبارات) لا يُسقط التطبيق — نكمل بالذاكرة.
-    }
+      await _loadMapStore('files', _files);
+      await _loadMapStore('chunks', _chunks);
+    } catch (_) {}
+  }
+
+  static Future<void> _loadMapStore(
+      String name, Map<String, Map<String, dynamic>> dest) async {
+    final raw = _prefs?.getString('aevora_store_$name');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        dest
+          ..clear()
+          ..addAll(decoded.map((k, v) => MapEntry(
+                k.toString(),
+                v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{},
+              )));
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> _persistStore(
+      String name, Map<String, Map<String, dynamic>> data) async {
+    try {
+      await _prefs?.setString('aevora_store_$name', jsonEncode(data));
+    } catch (_) {}
   }
 
   static Future<void> _persist(String key) async {
@@ -66,6 +90,7 @@ class LocalDb {
     } else if (store == 'files') {
       final m = value as Map;
       _files[m['id']?.toString() ?? ''] = Map<String, dynamic>.from(m);
+      await _persistStore('files', _files);
     } else if (store == 'blobs') {
       final m = value as Map;
       _blobs[m['id']?.toString() ?? ''] = Uint8ListBytes(
@@ -74,6 +99,7 @@ class LocalDb {
     } else if (store == 'chunks') {
       final m = value as Map;
       _chunks[m['id']?.toString() ?? ''] = Map<String, dynamic>.from(m);
+      await _persistStore('chunks', _chunks);
     }
   }
 
@@ -126,10 +152,12 @@ class LocalDb {
       await _persist(k);
     } else if (store == 'files') {
       _files.remove(k);
+      await _persistStore('files', _files);
     } else if (store == 'blobs') {
       _blobs.remove(k);
     } else if (store == 'chunks') {
       _chunks.remove(k);
+      await _persistStore('chunks', _chunks);
     }
   }
 
@@ -147,10 +175,12 @@ class LocalDb {
       } catch (_) {}
     } else if (store == 'files') {
       _files.clear();
+      await _persistStore('files', _files);
     } else if (store == 'blobs') {
       _blobs.clear();
     } else if (store == 'chunks') {
       _chunks.clear();
+      await _persistStore('chunks', _chunks);
     }
   }
 

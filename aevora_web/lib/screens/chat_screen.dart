@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' if (kIsWeb) '';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -7,12 +6,15 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 
+import '../client/audio_stub.dart'
+    if (dart.library.io) '../client/audio_io.dart' as audio_file;
 import '../client/client_companion.dart';
 import '../client/client_export.dart';
 import '../client/client_handoff.dart';
 import '../client/client_llm.dart';
 import '../client/client_plan.dart';
 import '../client/client_rag.dart';
+import '../client/client_reminders.dart';
 import '../client/client_storage.dart';
 import '../client/client_sync.dart';
 import '../client/client_voice.dart';
@@ -366,6 +368,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // حفظ فوري لرسالة المستخدم لحظة الإرسال حتى لا تختفي أبداً عند أي
     // إعادة إنشاء للشاشة (تحديث جلسة/توجيه).
     await _persistMessages();
+    unawaited(ReminderService.instance.addFromChat(text));
 
     final assistant = _ChatMessage('', false);
     setState(() => _messages.add(assistant));
@@ -457,6 +460,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  String? _recordPath;
+
   Future<void> _toggleVoice() async {
     if (_isListening) {
       await _stopAndTranscribe();
@@ -468,10 +473,39 @@ class _ChatScreenState extends State<ChatScreen> {
         _addError('تم رفض إذن الميكروفون.');
         return;
       }
-      await _recorder.start(
-        const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000),
-        path: 'evora_voice.wav',
-      );
+      if (kIsWeb) {
+        _recordPath = 'evora_voice.wav';
+        await _recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          path: _recordPath!,
+        );
+      } else {
+        try {
+          _recordPath = await audio_file.voiceRecordPath('wav');
+          await _recorder.start(
+            const RecordConfig(
+              encoder: AudioEncoder.wav,
+              sampleRate: 16000,
+              numChannels: 1,
+            ),
+            path: _recordPath!,
+          );
+        } catch (_) {
+          _recordPath = await audio_file.voiceRecordPath('m4a');
+          await _recorder.start(
+            const RecordConfig(
+              encoder: AudioEncoder.aacLc,
+              sampleRate: 16000,
+              numChannels: 1,
+            ),
+            path: _recordPath!,
+          );
+        }
+      }
       if (mounted) setState(() => _isListening = true);
     } catch (_) {
       _addError('تعذّر بدء التسجيل — تحقق من إذن الميكروفون.');
@@ -482,20 +516,31 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final path = await _recorder.stop();
       if (mounted) setState(() => _isListening = false);
-      if (path == null) return;
+      final filePath = path ?? _recordPath;
+      if (filePath == null || filePath.isEmpty) {
+        _addError('لم يُحفظ التسجيل. أعد المحاولة.');
+        return;
+      }
 
       if (mounted) setState(() => _isThinking = true);
 
-      Uint8List audioBytes;
+      List<int> audioBytes;
       if (kIsWeb) {
-        audioBytes = (await http.get(Uri.parse(path))).bodyBytes;
+        audioBytes = (await http.get(Uri.parse(filePath))).bodyBytes;
       } else {
-        audioBytes = await File(path).readAsBytes();
+        audioBytes = await audio_file.readAudioBytes(filePath);
+      }
+      if (audioBytes.isEmpty) {
+        throw Exception('empty');
       }
 
+      final name = filePath.toLowerCase().endsWith('.m4a')
+          ? 'voice_query.m4a'
+          : 'voice_query.wav';
       final text = await groqTranscribe(
         apiKey: widget.keys.groqKey,
         wavBytes: audioBytes,
+        filename: name,
       );
       if (mounted) setState(() => _isThinking = false);
       await _send(text, speakReply: true);

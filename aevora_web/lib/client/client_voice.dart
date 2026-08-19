@@ -139,6 +139,7 @@ Uint8List _wrapPcmInWav(Uint8List pcm, int sampleRate) {
 Future<String> groqTranscribe({
   required String apiKey,
   required List<int> wavBytes,
+  String filename = 'voice_query.wav',
 }) async {
   if (apiKey.trim().isEmpty) {
     throw Exception('أضِف مفتاح Groq من الإعدادات لتفعيل التعرف على الصوت.');
@@ -151,7 +152,7 @@ Future<String> groqTranscribe({
   req.files.add(http.MultipartFile.fromBytes(
     'file',
     wavBytes,
-    filename: 'voice_query.wav',
+    filename: filename,
   ));
   req.fields['model'] = 'whisper-large-v3';
   req.fields['response_format'] = 'json';

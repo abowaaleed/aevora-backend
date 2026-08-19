@@ -87,4 +87,25 @@ void main() {
     expect(merged.length, 3);
     expect(merged.map((m) => m['id']), containsAll(['m1', 'm2', 'r2']));
   });
+
+  test('empty local files do not wipe cloud files', () {
+    final cloud = [
+      {'id': 'a.pdf', 'name': 'a.pdf', 'size': 10},
+    ];
+    final merged = mergeFileLists([], cloud, <String>{});
+    expect(merged.length, 1);
+    expect(merged.first['name'], 'a.pdf');
+  });
+
+  test('deleted names stay out of merged files', () {
+    final local = [
+      {'id': 'b.pdf', 'name': 'b.pdf'},
+    ];
+    final cloud = [
+      {'id': 'a.pdf', 'name': 'a.pdf'},
+      {'id': 'b.pdf', 'name': 'b.pdf'},
+    ];
+    final merged = mergeFileLists(local, cloud, {'a.pdf'});
+    expect(merged.map((m) => m['name']), ['b.pdf']);
+  });
 }

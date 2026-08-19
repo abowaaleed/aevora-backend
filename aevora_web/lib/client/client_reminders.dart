@@ -1,10 +1,17 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' show Color;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
+
+import 'client_reminder_parse.dart';
+import 'client_storage.dart';
+import 'client_sync.dart';
 
 // ──────────────────────────────────────────────
 //  نموذج البيانات: عنصر تنبيه واحد
@@ -316,7 +323,7 @@ class ReminderService {
     _initialized = true;
     try {
       const androidSettings =
-          AndroidInitializationSettings('@mipmap/ic_launcher');
+          AndroidInitializationSettings('ic_stat_aevora');
       const iosSettings = DarwinInitializationSettings(
         requestAlertPermission: true,
         requestBadgePermission: true,
@@ -330,7 +337,18 @@ class ReminderService {
         initSettings,
         onDidReceiveNotificationResponse: _onNotificationResponse,
       );
+      try {
+        tzdata.initializeTimeZones();
+        if (!kIsWeb) {
+          final name = await FlutterTimezone.getLocalTimezone();
+          tz.setLocalLocation(tz.getLocation(name));
+        }
+      } catch (_) {}
       if (!kIsWeb) {
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
         await _plugin
             .resolvePlatformSpecificImplementation<
                 IOSFlutterLocalNotificationsPlugin>()
@@ -359,6 +377,10 @@ class ReminderService {
 
   Future<ReminderPrefs> load() async {
     try {
+      final kv = await LocalDb.kvGetValue(_prefsKey);
+      if (kv is Map) {
+        return ReminderPrefs.fromJson(Map<String, dynamic>.from(kv));
+      }
       final p = await SharedPreferences.getInstance();
       final raw = p.getString(_prefsKey);
       if (raw != null && raw.isNotEmpty) {
@@ -384,7 +406,26 @@ class ReminderService {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setString(_prefsKey, jsonEncode(prefs.toJson()));
+      await LocalDb.kvPut(_prefsKey, prefs.toJson());
+      SyncStore.schedulePush();
     } catch (_) {}
+  }
+
+  /// من الدردشة: «ذكرني بموعد الساعة 10» → مهمة مجدولة تلقائياً.
+  Future<ReminderItem?> addFromChat(String userText) async {
+    final parsed = parseChatReminder(userText);
+    if (parsed == null) return null;
+    final prefs = await load();
+    final item = ReminderItem(
+      id: ReminderItem.generateId(),
+      type: ReminderType.task,
+      title: parsed.title,
+      hour: parsed.hour,
+      minute: parsed.minute,
+    );
+    final next = prefs.copyWith(items: [...prefs.items, item]);
+    await saveAndApply(next);
+    return item;
   }
 
   /// أيام الواجهة: 0=سبت … 6=جمعة. Dart: 1=اثنين … 7=أحد، 6=سبت.
@@ -401,9 +442,9 @@ class ReminderService {
           channelDescription: 'تنبيهات يومية للأفكار والمهام',
           importance: high ? Importance.max : Importance.high,
           priority: high ? Priority.max : Priority.high,
-          icon: '@mipmap/ic_launcher',
-          // sound: const RawResourceAndroidNotificationSound('aevora_sound'),
-          // playSound: true,
+          icon: 'ic_stat_aevora',
+          largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+          color: Color(0xFF4CAF50),
         ),
         iOS: const DarwinNotificationDetails(
           presentAlert: true,

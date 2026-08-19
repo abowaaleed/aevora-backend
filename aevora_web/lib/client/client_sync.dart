@@ -273,6 +273,11 @@ class SyncStore {
         await ConsentStore.applyRemote(consents);
       }
       await _applyCloudFiles(data);
+      final reminders = data['reminders'];
+      if (reminders is Map && reminders.isNotEmpty) {
+        await LocalDb.kvPut(
+            'aevora_reminder_prefs_v2', Map<String, dynamic>.from(reminders));
+      }
     } catch (_) {}
     // أبلغ شاشة المحادثة أن المحادثة المحلية تغيّرت من السحابة حتى تعيد
     // قراءتها وتُحدّث رسائلها (نظام الاشتراك وحده لم يُحدّث الواجهة).
@@ -407,25 +412,14 @@ class SyncStore {
     try {
       final files = data?['files'];
       if (files is! List || files.isEmpty) return;
-      final local = await LocalDb.listFiles();
-      final localNames = {
-        for (final f in local) (f['name'] ?? f['id']).toString(),
-      };
-      // لا نسحب محتوى أي ملف محذوف (محلياً أو سحابياً) — حتى لو بقي أرشيفه
-      // في السحابة لحين اكتمال تنظيفه، فلا يُستعاد على أي جهاز.
+      final wanted = <String>{};
       final deleted = await _deletedNames();
       if (data != null) deleted.addAll(_cloudDeletedNames(data));
-      // أسماء الملفات الجديدة الفعلية فقط (غير موجودة محلياً وغير محذوفة):
-      // دونها لا حاجة لقراءة مجموعة blobs إطلاقاً، ومستمع التغييرات يمر
-      // كثيراً فيجب أن يكون هذا المسار خفيفاً.
-      final wanted = <String>{};
       for (final f in files.whereType<Map>()) {
         final name = (f['name'] ?? f['id']).toString();
-        if (name.isNotEmpty &&
-            !localNames.contains(name) &&
-            !deleted.contains(name)) {
-          wanted.add(name);
-        }
+        if (name.isEmpty || deleted.contains(name)) continue;
+        final blob = await LocalDb.fileBlob(name);
+        if (blob == null || blob.bytes.isEmpty) wanted.add(name);
       }
       if (wanted.isEmpty) return;
       final cloudDocs = await FirebaseFirestore.instance
@@ -504,6 +498,18 @@ class SyncStore {
           state['chat_messages'] =
               mergeChatMessages(state['chat_messages'], cloudChat);
         }
+        final deleted = await _deletedNames();
+        deleted.addAll(_cloudDeletedNames(cloud.data() ?? const {}));
+        state['files'] = mergeFileLists(
+          state['files'],
+          cloud.data()?['files'],
+          deleted,
+        );
+        state['chunks'] = mergeChunkLists(
+          state['chunks'],
+          cloud.data()?['chunks'],
+          deleted,
+        );
       } catch (_) {}
       await FirebaseFirestore.instance
           .collection(_collection)
@@ -656,6 +662,7 @@ class SyncStore {
       'keys': keys.toCloudMap(),
       'files': files,
       'chunks': chunks,
+      'reminders': await LocalDb.kvGetValue('aevora_reminder_prefs_v2') ?? {},
     };
   }
 
@@ -685,7 +692,8 @@ class SyncStore {
         hashes[name] = hash;
       }
       await LocalDb.kvPut(hashKey, hashes);
-      // حذف أرشيف السحابة لأي ملف لم يعد موجوداً محلياً (يتضمن أجزاء multi).
+      final deleted = await _deletedNames();
+      if (deleted.isEmpty) return;
       final existing = await FirebaseFirestore.instance
           .collection(_collection)
           .doc(uid)
@@ -693,7 +701,7 @@ class SyncStore {
           .get();
       for (final doc in existing.docs) {
         final baseName = doc.id.split('#').first;
-        if (!localNames.contains(baseName)) {
+        if (deleted.contains(baseName)) {
           await doc.reference.delete();
         }
       }
@@ -803,4 +811,50 @@ List<Map<String, dynamic>> mergeChatMessages(
     merged.removeRange(0, merged.length - 100);
   }
   return merged;
+}
+
+/// اتحاد قوائم الملفات حسب الاسم: المحلي يغلب إن وُجد، والسحابة تملأ النقص.
+/// جهاز جديد فارغ لا يمسح ملفات الحساب.
+List<Map<String, dynamic>> mergeFileLists(
+  Object? localRaw,
+  Object? cloudRaw,
+  Set<String> deleted,
+) {
+  final byName = <String, Map<String, dynamic>>{};
+  void add(Object? raw, {required bool overwrite}) {
+    if (raw is! List) return;
+    for (final f in raw.whereType<Map>()) {
+      final name = (f['name'] ?? f['id']).toString();
+      if (name.isEmpty || deleted.contains(name)) continue;
+      if (!overwrite && byName.containsKey(name)) continue;
+      byName[name] = Map<String, dynamic>.from(f);
+    }
+  }
+
+  add(cloudRaw, overwrite: false);
+  add(localRaw, overwrite: true);
+  return byName.values.toList();
+}
+
+List<Map<String, dynamic>> mergeChunkLists(
+  Object? localRaw,
+  Object? cloudRaw,
+  Set<String> deleted,
+) {
+  final byId = <String, Map<String, dynamic>>{};
+  void add(Object? raw, {required bool overwrite}) {
+    if (raw is! List) return;
+    for (final c in raw.whereType<Map>()) {
+      final file = (c['file'] ?? '').toString();
+      if (file.isEmpty || deleted.contains(file)) continue;
+      final idx = (c['idx'] as num?)?.toInt() ?? 0;
+      final id = '$file::$idx';
+      if (!overwrite && byId.containsKey(id)) continue;
+      byId[id] = Map<String, dynamic>.from(c);
+    }
+  }
+
+  add(cloudRaw, overwrite: false);
+  add(localRaw, overwrite: true);
+  return byId.values.toList();
 }

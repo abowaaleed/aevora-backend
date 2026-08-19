@@ -229,9 +229,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             margin: EdgeInsets.zero,
             child: ListTile(
               leading: const Icon(Icons.alarm_rounded, color: Color(0xFF4CE0A3)),
-              title: const Text('ضبط تنبيهات المهام والأفكار',
+              title: const Text('رسائل ايفورا الذكية',
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-              subtitle: const Text('اقتراح يومي عن الأفكار والسلوكيات، وتذكير بمهامك — فعّلها',
+              subtitle: const Text('أفكار وسلوكيات ومهام يومية — سهلة وواضحة',
                   style: TextStyle(color: Colors.white60, fontSize: 12)),
               trailing: const Icon(Icons.chevron_left, color: Colors.white38),
               onTap: () => Navigator.of(context).push(
