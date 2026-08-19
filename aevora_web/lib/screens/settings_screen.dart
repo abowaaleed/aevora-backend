@@ -17,6 +17,7 @@ import 'document_screen.dart';
 import 'key_setup_screen.dart';
 import 'legal_screen.dart';
 import 'memory_screen.dart';
+import 'reminders_screen.dart';
 import 'subscription_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -205,6 +206,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
               trailing: const Icon(Icons.chevron_left, color: Colors.white38),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => MemoryScreen(keys: widget.keys)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            color: const Color(0xFF1E5B45),
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.alarm_rounded, color: Color(0xFF4CE0A3)),
+              title: const Text('ضبط تنبيهات المهام والأفكار',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+              subtitle: const Text('اقتراح يومي عن الأفكار والسلوكيات، وتذكير بمهامك — فعّلها',
+                  style: TextStyle(color: Colors.white60, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_left, color: Colors.white38),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const RemindersScreen()),
               ),
             ),
           ),

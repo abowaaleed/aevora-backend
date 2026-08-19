@@ -6,30 +6,47 @@ import 'package:flutter/material.dart';
 import 'client/client_auth.dart';
 import 'client/client_consent.dart';
 import 'client/client_plan.dart';
+import 'client/client_reminders.dart';
 import 'client/client_sync.dart';
 import 'config.dart';
 import 'screens/key_setup_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/notification_content_screen.dart';
 import 'screens/shell.dart';
+
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final keys = await AppStorage.load();
-  // تحميل الاشتراك والموافقات المحلية قبل عرض الواجهة.
   await PlanStore.loadLocal();
   await ConsentStore.loadLocal();
   try {
     await initFirebase();
     if (isAuthEnabled) {
-      // سحب بيانات الحساب قبل عرض الواجهة، ثم ربط تغيّرات الجلسة.
       await SyncStore.prepare();
       SyncStore.startListening();
       PlanStore.startListening();
       await SyncStore.waitForReady();
     }
-  } catch (_) {
-    // أي فشل في Firebase (الشبكة/التهيئة) لا يُسقط التطبيق؛ نعمل محلياً.
-  }
+  } catch (_) {}
+  unawaited(ReminderService.instance.init().then((_) async {
+    try {
+      final prefs = await ReminderService.instance.load();
+      await ReminderService.instance.apply(prefs);
+    } catch (_) {}
+    final payload = ReminderService.consumePayload();
+    if (payload != null && payload.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final nav = appNavigatorKey.currentState;
+        if (nav != null) {
+          nav.push(MaterialPageRoute(
+            builder: (_) => NotificationContentScreen(payload: payload),
+          ));
+        }
+      });
+    }
+  }));
   runApp(AevoraWebApp(keys: keys));
 }
 
@@ -42,7 +59,6 @@ class AevoraWebApp extends StatefulWidget {
 }
 
 class _AevoraWebAppState extends State<AevoraWebApp> {
-  final _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<User?>? _authSub;
   // تتبّع حالة الجلسة الأخيرة: نوجّه فقط عند تغيُّر حقيقي (دخول/خروج) ونتجاهل
   // أحداث تجديد التوكن التي تصدر من نفس المستخدم، حتى لا تُعاد شاشة التطبيق
@@ -66,7 +82,7 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
             if (user != null) {
               await SyncStore.waitForReady();
             }
-            final nav = _navigatorKey.currentState;
+            final nav = appNavigatorKey.currentState;
             if (nav == null) return;
             nav.pushNamedAndRemoveUntil(
               user != null ? '/shell' : '/login',
@@ -95,7 +111,7 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: appName,
-      navigatorKey: _navigatorKey,
+      navigatorKey: appNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         colorScheme: ColorScheme.dark(
@@ -116,6 +132,7 @@ class _AevoraWebAppState extends State<AevoraWebApp> {
         '/login': (_) => const LoginScreen(),
         '/setup': (_) => const KeySetupScreen(),
         '/shell': (_) => const Shell(),
+        '/notification': (_) => const NotificationContentScreen(),
       },
     );
   }
